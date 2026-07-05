@@ -510,6 +510,53 @@ def patrones_doble_circulo(r1, r2, lam, z, N):
     }
 
 
+# ---- Dos redes de difracción en cascada, con desplazamiento (pto 6) ---------
+
+def transmision_redes(x, a, d, N, s):
+    """
+    Transmisión t₁(x)·t₂(x−s) de dos redes binarias idénticas apiladas: cada
+    red tiene N ranuras de ancho `a` y período `d` (=3a por el enunciado),
+    centradas en el origen. La red 2 está desplazada `s`. Como el producto de
+    dos binarias solo transmite donde AMBAS abren, el resultado es de nuevo una
+    red binaria: alineadas (s=0) → t·t=t (una sola red); al desplazar, el
+    solape de las ranuras se estrecha y desaparece por tramos.
+    """
+    centros = (np.arange(N) - (N - 1) / 2.0) * d
+    g1 = np.zeros_like(x)
+    g2 = np.zeros_like(x)
+    for c in centros:
+        g1 += (x >= c - a / 2) & (x <= c + a / 2)
+        g2 += (x >= c - a / 2 + s) & (x <= c + a / 2 + s)
+    return g1 * g2
+
+
+def patron_redes_cascada(a, N, s, lam, M=16384, pad=4.0):
+    """
+    Patrón de Fraunhofer 1D de las dos redes en cascada (pto 6). Rasteriza la
+    transmisión t₁·t₂(−s) y hace FFT 1D → I(senθ). Período fijo d=3a (ancho de
+    ranura a, hueco 2a). El slider de desplazamiento llega hasta s=N·d = 3aN,
+    donde las dos redes finitas dejan de solaparse (campo oscuro total).
+
+    Normalizada al pico central (orden 0) de la configuración alineada (s=0),
+    de modo que la CAÍDA de intensidad al desplazar es visible: s=d → red de
+    N−1 ranuras (factor ((N−1)/N)²), s∈[a,2a] (mod d) → oscuro, s=Nd → 0.
+
+    Devuelve (sen_theta, I_norm, d, W=3aN).
+    """
+    d = 3.0 * a
+    W = N * d
+    L = pad * (W + s + d)
+    x = (np.arange(M) - M // 2) * (L / M)
+    dx = L / M
+    t = transmision_redes(x, a, d, N, s)
+    F = np.fft.fftshift(np.fft.fft(np.fft.ifftshift(t)))
+    f = np.fft.fftshift(np.fft.fftfreq(M, dx))
+    sen_theta = lam * f
+    ref = (N * a / dx) ** 2                      # pico central en s=0
+    I = np.abs(F) ** 2 / ref if ref > 0 else np.abs(F) ** 2
+    return sen_theta, I, d, W
+
+
 # =============================================================================
 # 2. INTERFAZ GRÁFICA
 # =============================================================================
@@ -1672,6 +1719,160 @@ class TabDobleCirculo:
         self.canvas.draw_idle()
 
 
+class TabRedesCascada:
+    """
+    Ejercicio (taller pto 6): dos redes de difracción idénticas apiladas
+    (N ranuras de ancho a, período d=3a), con la red 2 desplazable una cantidad
+    s hasta que dejan de solaparse (s=N·d). Se grafica I(senθ). Controles
+    protagonistas: a (ancho de ranura) y N (nº de ranuras), más el
+    desplazamiento s; λ y z como sliders.
+    """
+
+    def __init__(self, parent):
+        self.parent = parent
+        self._build_controls()
+        self._build_figure()
+        self.recompute()
+
+    def _build_controls(self):
+        panel = ttk.Frame(self.parent, padding=8)
+        panel.pack(side="left", fill="y")
+        ttk.Label(panel, text="Dos redes en cascada (d=3a)",
+                  font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
+
+        f1 = ttk.LabelFrame(panel, text="Redes (críticos: a y N)", padding=6)
+        f1.pack(fill="x", pady=4)
+        self.a = crear_slider(f1, "a ranura (mm)", 0.05, 1.0, 0.2,
+                              self.recompute, "{:.3f}")
+        self.N = crear_slider(f1, "N ranuras", 2.0, 20.0, 8.0,
+                              self.recompute, "{:.0f}")
+
+        f2 = ttk.LabelFrame(panel, text="Desplazamiento red 2", padding=6)
+        f2.pack(fill="x", pady=4)
+        self.s = crear_slider(f2, "s (mm)", 0.0, 5.0, 0.0,
+                              self.recompute, "{:.3f}")
+
+        f3 = ttk.LabelFrame(panel, text="Fuente / observación", padding=6)
+        f3.pack(fill="x", pady=4)
+        self.lam = crear_slider(f3, "λ (nm)", 380.0, 1000.0, 633.0,
+                                self.recompute, "{:.0f}")
+        self.z = crear_slider(f3, "z (m)", 0.1, 20.0, 1.0, self.recompute, "{:.2f}")
+
+        st = ttk.LabelFrame(panel, text="Órdenes y desplazamiento", padding=6)
+        st.pack(fill="x", pady=4)
+        self.status = tk.StringVar(value="")
+        self.status_lbl = ttk.Label(st, textvariable=self.status, justify="left",
+                                    font=("Consolas", 9))
+        self.status_lbl.pack(anchor="w")
+
+    def _build_figure(self):
+        right = ttk.Frame(self.parent)
+        right.pack(side="left", fill="both", expand=True)
+        self.fig = Figure(figsize=(10.5, 8.0))
+        gs = self.fig.add_gridspec(3, 1, hspace=0.45,
+                                   height_ratios=[0.7, 0.6, 1.3])
+        self.ax_red = self.fig.add_subplot(gs[0, 0])   # diagrama espacio real
+        self.ax_pat = self.fig.add_subplot(gs[1, 0])   # franjas 2D
+        self.ax_prof = self.fig.add_subplot(gs[2, 0])  # perfil I(senθ)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        NavigationToolbar2Tk(self.canvas, right).update()
+
+    def recompute(self):
+        a = self.a.get() * 1e-3
+        N = int(self.N.get())
+        d = 3.0 * a
+        W = N * d                                    # s límite (dejan de solapar)
+        s = min(self.s.get() * 1e-3, W)              # clamp al límite de solape
+        lam, z = self.lam.get() * 1e-9, self.z.get()
+
+        sen, I, d, W = patron_redes_cascada(a, N, s, lam)
+        # rango de visualización: ~4 lóbulos de la envolvente de 1 ranura
+        smax = 4.0 * lam / a
+        sel = np.abs(sen) <= smax
+        sen_v, I_v = sen[sel], I[sel]
+
+        # --- Diagrama en espacio real: red 1, red 2(−s), solape ---
+        ax = self.ax_red
+        ax.clear()
+        xr = np.linspace(-2.5 * d, 2.5 * d, 3000)
+        t1 = transmision_redes(xr, a, d, N, 0.0).clip(0, 1)
+        # red2 desplazada: uso una sola red evaluada con corrimiento
+        centros = (np.arange(N) - (N - 1) / 2.0) * d
+        r1 = np.zeros_like(xr); r2 = np.zeros_like(xr)
+        for c in centros:
+            r1 += (xr >= c - a / 2) & (xr <= c + a / 2)
+            r2 += (xr >= c - a / 2 + s) & (xr <= c + a / 2 + s)
+        solape = (r1 * r2).clip(0, 1)
+        xr_mm = xr * 1e3
+        ax.fill_between(xr_mm, 2.4, 3.2, where=r1 > 0, color="#3b6", step="mid")
+        ax.fill_between(xr_mm, 1.3, 2.1, where=r2 > 0, color="#38c", step="mid")
+        ax.fill_between(xr_mm, 0.2, 1.0, where=solape > 0, color="#e33", step="mid")
+        ax.text(xr_mm[0], 2.8, " red 1", va="center", fontsize=8)
+        ax.text(xr_mm[0], 1.7, " red 2", va="center", fontsize=8)
+        ax.text(xr_mm[0], 0.6, " solape", va="center", fontsize=8)
+        ax.set_ylim(0, 3.4)
+        ax.set_yticks([])
+        ax.set_xlim(xr_mm[0], xr_mm[-1])
+        ax.set_xlabel("x̃ [mm]  (transmisión efectiva = solape)")
+        ax.set_title("Redes en espacio real (red 2 desplazada s)")
+
+        # --- Franjas 2D ---
+        ax = self.ax_pat
+        ax.clear()
+        ax.imshow(np.tile(I_v, (40, 1)),
+                  extent=[sen_v[0], sen_v[-1], -1, 1], origin="lower",
+                  cmap="inferno", aspect="auto", vmin=0, vmax=1.0)
+        ax.set_yticks([])
+        ax.set_xlabel("senθ")
+        ax.set_title("Patrón de difracción")
+
+        # --- Perfil I(senθ) + envolvente + órdenes ---
+        ax = self.ax_prof
+        ax.clear()
+        ax.plot(sen_v, I_v, color="crimson", lw=1.0, label="I(senθ)")
+        ax.plot(sen_v, np.sinc(a * sen_v / lam) ** 2, color="steelblue",
+                lw=0.9, ls="--", label="envolvente de 1 ranura")
+        ax.fill_between(sen_v, I_v, alpha=0.15, color="crimson")
+        m = 1
+        while m * lam / d <= smax:
+            for signo in (+1, -1):
+                col = "navy" if m % 3 else "gray"
+                ax.axvline(signo * m * lam / d, color=col, lw=0.5, ls=":")
+            m += 1
+        ax.set_xlim(-smax, smax)
+        ax.set_ylim(0, max(1.05, I_v.max() * 1.1))
+        ax.set_xlabel("senθ   (órdenes en mλ/d; grises = múltiplos de 3, faltan)")
+        ax.set_ylabel("I / I₀(s=0)")
+        ax.legend(fontsize=8, loc="upper right")
+        ax.set_title("Perfil de intensidad")
+
+        # --- Estado ---
+        s_mm, W_mm = s * 1e3, W * 1e3
+        # tramo oscuro dentro del período actual
+        s_frac = s % d
+        oscuro = a <= s_frac <= 2 * a
+        n_perdidas = int(s // d)
+        obs = "0, ±1, ±2, ±4, ±5, ±7 …  (faltan ±3, ±6: múltiplos de d/a=3)"
+        txt = (
+            f"d = 3a = {d*1e3:.3f} mm\n"
+            f"s_sep (dejan de solapar) = N·d = {W_mm:.2f} mm\n"
+            f"─────────────────────────────\n"
+            f"Alineadas (s=0): órdenes\n  {obs}\n"
+            f"─────────────────────────────\n"
+            f"s = {s_mm:.3f} mm   ({'CAMPO OSCURO' if oscuro else 'con solape'})\n"
+            f"ranuras que aún solapan ≈ {max(N - n_perdidas, 0)}\n"
+            f"Al desplazar: posiciones de orden\n"
+            f"FIJAS (d cte); reaparecen los\n"
+            f"múltiplos de 3; I total ↓ → 0 en\n"
+            f"s∈[a,2a] (mod d) y en s=N·d."
+        )
+        self.status.set(txt)
+        self.status_lbl.configure(foreground="#c00000" if oscuro else "#333333")
+
+        self.canvas.draw_idle()
+
+
 # =============================================================================
 # 4. UTILIDADES COMPARTIDAS DE DIBUJO (usadas solo por las pestañas de taller)
 # =============================================================================
@@ -1747,6 +1948,10 @@ def main():
     tab7 = ttk.Frame(nb)
     nb.add(tab7, text="Taller — Doble círculo (Fh+Fr)")
     TabDobleCirculo(tab7)
+
+    tab8 = ttk.Frame(nb)
+    nb.add(tab8, text="Taller — Redes en cascada")
+    TabRedesCascada(tab8)
 
     root.mainloop()
 

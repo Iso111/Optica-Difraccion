@@ -7,7 +7,7 @@ Tres programas interactivos para simular **patrones de difracción óptica** en 
 ### Código 20: Fraunhofer Analítico 2D ✅
 - **Ubicación:** `Codigo_1/fraunhofer_analitico.py`
 - **Objetivo:** Graficar el patrón 2D de intensidad en Fraunhofer usando la expresión analítica
-- **GUI:** tkinter con 8 pestañas (`ttk.Notebook`), cada una un ejercicio independiente. Ejecutar:
+- **GUI:** tkinter con 9 pestañas (`ttk.Notebook`), cada una un ejercicio independiente. Ejecutar:
   `python Codigo_1/fraunhofer_analitico.py`
 - **Régimen explícito:** cada pestaña muestra el número de Fresnel `N_F` y declara si el cálculo
   Fraunhofer es válido (verde) o si estás en campo cercano → usar Código 22 (rojo)
@@ -47,6 +47,14 @@ Tres programas interactivos para simular **patrones de difracción óptica** en 
   misma máscara — Fraunhofer (`|𝓕|²`, axial 15.3·I) y **Fresnel** (motor `fresnel_propagate` de FFT
   único, reutilizable por el Código 22; axial **2.25·I**, la respuesta física real ya que z=2m es
   campo cercano). Validado headless: disco de 1 zona → 4·I, abertura del pto 19 → 1.5A / 2.25I.
+- **Redes en cascada** (pto 6): dos redes binarias idénticas apiladas (N ranuras de ancho `a`, hueco
+  `2a` → período `d=3a`), con la red 2 desplazable `s` hasta `s=N·d` (donde dejan de solaparse). La
+  transmisión total `t₁(x)·t₂(x−s)` se rasteriza y se hace FFT 1D → `I(senθ)`. **Alineadas (s=0):**
+  patrón de una sola red, faltan los órdenes múltiplos de 3 (±3,±6). **Desplazada:** las posiciones
+  de orden quedan FIJAS (d cte), la rendija efectiva `a−s` se estrecha → reaparecen los órdenes
+  faltantes e I total ↓, anulándose por completo en `s∈[a,2a]` (mod d: redes complementarias → campo
+  oscuro) y en `s=N·d`. Incluye diagrama en espacio real (red 1 / red 2 / solape). Validado headless:
+  s=0 = red de N ranuras (correlación 1.0), s=a → I≈0, s=d → red de N−1 ranuras (factor (7/8)²).
 
 ### Código 21: Fraunhofer vía Transformada de Fourier (FFT 2D)
 - **Ubicación:** `Codigo_2/`
