@@ -388,6 +388,128 @@ def ordenes_red(d_lam, sin_max=1.0, m_max=20):
     return ordenes
 
 
+# ---- Escalón de Michelson (pto 15): red de N peldaños de vidrio -------------
+
+def intensidad_escalon(sin_theta, s, h, n, lam, N):
+    """
+    Patrón de Fraunhofer del escalón de Michelson: una "escalera" de N láminas
+    de vidrio (índice n, espesor h, saliente de ancho s). Cada peldaño actúa
+    como una rendija de ancho s; entre peldaños vecinos el desfase de camino
+    óptico tiene dos aportes:
+
+        · geométrico (como red normal):  s·senθ
+        · vidrio extra (un espesor h más por peldaño):  (n−1)·h
+        ⇒  Δ = (n−1)·h + s·senθ
+
+        I(θ) = sinc²(s·senθ/λ) · [ sin(Nπ·Δ/λ) / (N·sin(π·Δ/λ)) ]²
+
+    · sinc²: envolvente de difracción de UN peldaño (mínimos en s·senθ=mλ).
+    · factor de red: máximos principales en Δ=mλ. El término (n−1)h (≈mm,
+      constante) empuja los órdenes a m enormes → altísima dispersión.
+
+    El lóbulo central de la envolvente abarca u=s·senθ/λ ∈ (−1,1), o sea Δu=2 =
+    2 espaciados de orden → caben ≈2 máximos principales por máximo de
+    difracción (según el desfase fraccional (n−1)h/λ se ven 1 ó 2). Para N=1
+    se reduce a la envolvente sinc². Normalizada a la envolvente en θ=0.
+    """
+    u = s * sin_theta / lam
+    env = np.sinc(u) ** 2
+    if N <= 1:
+        return np.clip(env, 0.0, None)
+    Delta = (n - 1.0) * h + s * sin_theta
+    v = Delta / lam
+    num = np.sin(N * np.pi * v)
+    den = N * np.sin(np.pi * v)
+    den_safe = np.where(np.abs(den) < 1e-9, 1.0, den)
+    red = np.where(np.abs(den) < 1e-9, 1.0, (num / den_safe) ** 2)
+    return np.clip(env * red, 0.0, None)
+
+
+# ---- Doble círculo / zonas de Fresnel (pto 19) -----------------------------
+
+def mascara_doble_circulo(X, Y, r1, r2):
+    """
+    Máscara (True=transparente) de la abertura del pto 19: disco de radio r1 en
+    3 cuadrantes, extendido a r2 SOLO en el cuadrante superior-derecho (x≥0,
+    y≥0). Con z=2m y λ=500nm: r1=√(λz)=1mm (1ª zona de Fresnel) y r2=√(2λz)=
+    1.414mm (2ª zona) → toda la 1ª zona + ¼ de la 2ª zona.
+    """
+    q_sup_der = (X >= 0.0) & (Y >= 0.0) & (X ** 2 + Y ** 2 <= r2 ** 2)
+    resto = (X ** 2 + Y ** 2 <= r1 ** 2)
+    return q_sup_der | resto
+
+
+def area_doble_circulo(r1, r2):
+    """Área de la abertura del pto 19: ¾ de disco r1 + ¼ de disco r2."""
+    return 0.75 * np.pi * r1 ** 2 + 0.25 * np.pi * r2 ** 2
+
+
+def fresnel_propagate(U0, dx, lam, z):
+    """
+    Difracción de Fresnel de campo cercano por FFT único (motor reutilizable
+    por el Código 22). Propaga el campo complejo `U0` (malla N×N, paso `dx` [m])
+    una distancia `z` [m] en la aproximación de Fresnel:
+
+        U(x') = 1/(iλz) · e^{iπx'²/λz} · 𝓕{ U0(x)·e^{iπx²/λz} }
+
+    El paso en el plano de observación es dx' = λz/(N·dx). Válido mientras el
+    "chirp" cuadrático esté bien muestreado: L=N·dx < √(N·λz). Con onda plana
+    incidente de amplitud 1, el campo queda normalizado (una abertura de una
+    zona de Fresnel da |U|=2 en el eje, I=4; la abertura del pto 19 da |U|=1.5,
+    I=2.25 — validado headless).
+
+    Devuelve (U complejo en el plano de obs, dx2 paso de obs [m]).
+    """
+    N = U0.shape[0]
+    x = (np.arange(N) - N // 2) * dx
+    X, Y = np.meshgrid(x, x)
+    Q1 = np.exp(1j * np.pi / (lam * z) * (X ** 2 + Y ** 2))
+    A = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(U0 * Q1)))
+    dx2 = lam * z / (N * dx)
+    x2 = (np.arange(N) - N // 2) * dx2
+    X2, Y2 = np.meshgrid(x2, x2)
+    Q2 = np.exp(1j * np.pi / (lam * z) * (X2 ** 2 + Y2 ** 2))
+    U = (1.0 / (1j * lam * z)) * Q2 * A * dx * dx
+    return U, dx2
+
+
+def patrones_doble_circulo(r1, r2, lam, z, N):
+    """
+    Calcula ambos patrones 2D de la abertura del pto 19 sobre la MISMA máscara
+    rasterizada: Fraunhofer (campo lejano, |𝓕|²) y Fresnel (campo cercano, vía
+    `fresnel_propagate`). Devuelve un dict con máscara, ejes y ambos patrones
+    normalizados a la intensidad incidente I (onda plana de amplitud 1).
+
+    La ventana de la abertura se elige L = min(6·r2, 0.8·√(Nλz)) para (a)
+    contener la abertura con margen y (b) respetar el muestreo del chirp de
+    Fresnel. dx_obs difiere entre ambos métodos: Fresnel usa λz/(N·dx);
+    Fraunhofer usa el mismo mapeo (idéntico dx', ya que es el mismo FFT-único
+    con z→∞ en el chirp de salida).
+    """
+    r_max = max(r1, r2)
+    L = min(6.0 * r_max, 0.8 * np.sqrt(N * lam * z))
+    x = (np.arange(N) - N // 2) * (L / N)
+    dx = L / N
+    X, Y = np.meshgrid(x, x)
+    mascara = mascara_doble_circulo(X, Y, r1, r2).astype(complex)
+
+    # Fresnel (campo cercano)
+    U_fr, dx2 = fresnel_propagate(mascara, dx, lam, z)
+    I_fresnel = np.abs(U_fr) ** 2
+
+    # Fraunhofer (campo lejano): misma TF pero sin el chirp de salida.
+    A = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(mascara)))
+    U_fh = A * dx * dx / (lam * z)          # amplitud ∝ TF, mismo mapeo dx2
+    I_fraunhofer = np.abs(U_fh) ** 2         # I/I0 con I0=(área/λz)² en el eje
+
+    x_obs = (np.arange(N) - N // 2) * dx2
+    return {
+        "mascara": mascara.real, "x_ap": x, "x_obs": x_obs,
+        "I_fresnel": I_fresnel, "I_fraunhofer": I_fraunhofer,
+        "U_fresnel_axial": U_fr[N // 2, N // 2],
+    }
+
+
 # =============================================================================
 # 2. INTERFAZ GRÁFICA
 # =============================================================================
@@ -1277,6 +1399,279 @@ class TabRendijas:
         self.canvas.draw_idle()
 
 
+class TabEscalon:
+    """
+    Ejercicio (taller pto 15): escalón de Michelson — red de N peldaños de
+    vidrio (índice n, espesor h, saliente s). Cada peldaño es una rendija de
+    ancho s con un desfase extra (n−1)h por el vidrio. Se grafica I frente a
+    la variable normalizada u = s·senθ/λ (los ángulos reales son microscópicos
+    por la enorme dispersión). Valores por defecto: escalón real (h≈1cm, s≈1mm,
+    n≈1.5, N=10).
+    """
+
+    def __init__(self, parent):
+        self.parent = parent
+        self._build_controls()
+        self._build_figure()
+        self.recompute()
+
+    def _build_controls(self):
+        panel = ttk.Frame(self.parent, padding=8)
+        panel.pack(side="left", fill="y")
+        ttk.Label(panel, text="Escalón de Michelson (N peldaños)",
+                  font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
+
+        f1 = ttk.LabelFrame(panel, text="Escalón", padding=6)
+        f1.pack(fill="x", pady=4)
+        self.N = crear_slider(f1, "N (láminas)", 2.0, 30.0, 10.0,
+                              self.recompute, "{:.0f}")
+        self.s = crear_slider(f1, "s saliente (mm)", 0.1, 5.0, 1.0,
+                              self.recompute, "{:.3f}")
+        self.h = crear_slider(f1, "h espesor (mm)", 0.5, 30.0, 10.0,
+                              self.recompute, "{:.2f}")
+        self.n = crear_slider(f1, "n vidrio", 1.3, 2.0, 1.5,
+                              self.recompute, "{:.3f}")
+
+        f2 = ttk.LabelFrame(panel, text="Fuente / rango", padding=6)
+        f2.pack(fill="x", pady=4)
+        self.lam = crear_slider(f2, "λ (nm)", 380.0, 1000.0, 500.0,
+                                self.recompute, "{:.0f}")
+        self.umax = crear_slider(f2, "u_max (=s·senθ/λ)", 1.5, 5.0, 2.5,
+                                 self.recompute, "{:.1f}")
+
+        st = ttk.LabelFrame(panel, text="Resultado", padding=6)
+        st.pack(fill="x", pady=4)
+        self.status = tk.StringVar(value="")
+        self.status_lbl = ttk.Label(st, textvariable=self.status, justify="left",
+                                    font=("Consolas", 9))
+        self.status_lbl.pack(anchor="w")
+
+    def _build_figure(self):
+        right = ttk.Frame(self.parent)
+        right.pack(side="left", fill="both", expand=True)
+        self.fig = Figure(figsize=(10.5, 8.0))
+        gs = self.fig.add_gridspec(2, 1, hspace=0.32, height_ratios=[1, 1.2])
+        self.ax_pat = self.fig.add_subplot(gs[0, 0])
+        self.ax_prof = self.fig.add_subplot(gs[1, 0])
+        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        NavigationToolbar2Tk(self.canvas, right).update()
+
+    def recompute(self):
+        N = int(self.N.get())
+        s, h = self.s.get() * 1e-3, self.h.get() * 1e-3
+        n, lam = self.n.get(), self.lam.get() * 1e-9
+        umax = self.umax.get()
+
+        u = np.linspace(-umax, umax, 8000)          # u = s·senθ/λ
+        sin_theta = u * lam / s
+        I = intensidad_escalon(sin_theta, s, h, n, lam, N)
+
+        # --- Patrón 2D (franjas verticales) ---
+        ax = self.ax_pat
+        ax.clear()
+        ax.imshow(np.tile(I, (60, 1)), extent=[-umax, umax, -1, 1],
+                  origin="lower", cmap="inferno", aspect="auto",
+                  vmax=max(I.max(), 1e-12))
+        ax.set_yticks([])
+        ax.set_xlabel("u = s·senθ/λ")
+        ax.set_title(f"Escalón de Michelson — {N} peldaños")
+
+        # --- Perfil I(u) + envolvente ---
+        ax = self.ax_prof
+        ax.clear()
+        ax.plot(u, I, color="crimson", lw=1.0, label="I(u)")
+        ax.plot(u, np.sinc(u) ** 2, color="steelblue", lw=0.9, ls="--",
+                label="envolvente de 1 peldaño")
+        ax.fill_between(u, I, alpha=0.15, color="crimson")
+        for k in range(-int(umax), int(umax) + 1):    # ceros de la envolvente
+            if k != 0:
+                ax.axvline(k, color="navy", lw=0.5, ls=":")
+        ax.set_xlim(-umax, umax)
+        ax.set_ylim(bottom=0.0)
+        ax.set_xlabel("u = s·senθ/λ    (ceros de difracción en u entero)")
+        ax.set_ylabel("I / I_env")
+        ax.legend(fontsize=8, loc="upper right")
+        ax.set_title("Perfil — máx. principales (peine) bajo la envolvente")
+
+        # --- Resultado numérico ---
+        m0 = (n - 1.0) * h / lam
+        # resolución / dispersión: nº de peldaños N determina el ancho de cada
+        # máximo principal (Δu_FWHM ≈ 1/N); poder resolvente R = m0·N.
+        R = m0 * N
+        txt = (
+            f"Orden central  m₀=(n−1)h/λ = {m0:,.0f}\n"
+            f"Poder resolvente  R=m₀·N ≈ {R:,.0f}\n"
+            f"─────────────────────────────\n"
+            f"Máximos principales por máximo\n"
+            f"de difracción ≈ 2  (Δu=2 = 2\n"
+            f"espaciados de orden; se ven 1–2\n"
+            f"según el desfase (n−1)h/λ)"
+        )
+        self.status.set(txt)
+        self.status_lbl.configure(foreground="#333333")
+
+        self.canvas.draw_idle()
+
+
+class TabDobleCirculo:
+    """
+    Ejercicio (taller pto 19): abertura de doble círculo — disco de radio r1 en
+    3 cuadrantes, extendido a r2 en el cuadrante superior-derecho. Con z=2m y
+    λ=500nm los radios son las zonas de Fresnel 1 (r1=1mm) y 2 (r2=1.414mm).
+
+    EXCEPCIÓN a la regla "Código 20 = solo Fraunhofer": esta pestaña muestra
+    AMBOS regímenes sobre la misma abertura — el patrón Fraunhofer (campo
+    lejano, |𝓕|²) y el patrón Fresnel (campo cercano, motor `fresnel_propagate`
+    reutilizable por el Código 22) — porque el enunciado pide Fresnel pero se
+    quiere ver también el resultado de campo lejano. Se declara explícitamente
+    que a z=2m el régimen físico REAL es Fresnel (respuesta 1.5A, 2.25I); el
+    valor Fraunhofer (15.3·I) es el de campo lejano, no válido a esta z.
+    """
+
+    def __init__(self, parent):
+        self.parent = parent
+        self._build_controls()
+        self._build_figure()
+        self.recompute()
+
+    def _build_controls(self):
+        panel = ttk.Frame(self.parent, padding=8)
+        panel.pack(side="left", fill="y")
+        ttk.Label(panel, text="Doble círculo — Fraunhofer y Fresnel",
+                  font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
+
+        f1 = ttk.LabelFrame(panel, text="Abertura (mm)", padding=6)
+        f1.pack(fill="x", pady=4)
+        self.r1 = crear_slider(f1, "r1 (3 cuadrantes)", 0.2, 3.0, 1.0,
+                               self.recompute, "{:.3f}")
+        self.r2 = crear_slider(f1, "r2 (cuad. sup-der)", 0.2, 4.0, 1.41,
+                               self.recompute, "{:.3f}")
+
+        f2 = ttk.LabelFrame(panel, text="Fuente / observación", padding=6)
+        f2.pack(fill="x", pady=4)
+        self.lam = crear_slider(f2, "λ (nm)", 380.0, 1000.0, 500.0,
+                                self.recompute, "{:.0f}")
+        self.z = crear_slider(f2, "z (m)", 0.5, 40.0, 2.0, self.recompute, "{:.2f}")
+        self.xmax = crear_slider(f2, "x'_max (mm)", 1.0, 60.0, 8.0,
+                                 self.recompute, "{:.1f}")
+        self.N = crear_slider(f2, "N (px, FFT)", 256.0, 2048.0, 1024.0,
+                              self.recompute, "{:.0f}")
+
+        f3 = ttk.LabelFrame(panel, text="Escala de intensidad", padding=6)
+        f3.pack(fill="x", pady=4)
+        self.escala = tk.StringVar(value="gamma")
+        for txt, val in (("Lineal", "lineal"), ("γ (0.4)", "gamma"), ("Log", "log")):
+            ttk.Radiobutton(f3, text=txt, variable=self.escala, value=val,
+                            command=self.recompute).pack(side="left")
+
+        st = ttk.LabelFrame(panel, text="Valores axiales en P'", padding=6)
+        st.pack(fill="x", pady=4)
+        self.status = tk.StringVar(value="")
+        self.status_lbl = ttk.Label(st, textvariable=self.status, justify="left",
+                                    font=("Consolas", 9))
+        self.status_lbl.pack(anchor="w")
+
+    def _build_figure(self):
+        right = ttk.Frame(self.parent)
+        right.pack(side="left", fill="both", expand=True)
+        self.fig = Figure(figsize=(10.5, 8.0))
+        gs = self.fig.add_gridspec(2, 2, hspace=0.30, wspace=0.28)
+        self.ax_ap = self.fig.add_subplot(gs[0, 0])
+        self.ax_fh = self.fig.add_subplot(gs[0, 1])
+        self.ax_fr = self.fig.add_subplot(gs[1, 0])
+        self.ax_prof = self.fig.add_subplot(gs[1, 1])
+        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        NavigationToolbar2Tk(self.canvas, right).update()
+
+    def recompute(self):
+        r1, r2 = self.r1.get() * 1e-3, self.r2.get() * 1e-3
+        lam, z = self.lam.get() * 1e-9, self.z.get()
+        N = int(self.N.get())
+
+        d = patrones_doble_circulo(r1, r2, lam, z, N)
+        c = N // 2
+        I_fr_axial = d["I_fresnel"][c, c]
+        I_fh_axial = d["I_fraunhofer"][c, c]
+
+        # Recorte al centro para visualizar (la ventana FFT es ~10× el patrón).
+        xmax = self.xmax.get() * 1e-3
+        sel = np.abs(d["x_obs"]) <= xmax
+        x_obs = d["x_obs"][sel]
+        I_fr = d["I_fresnel"][np.ix_(sel, sel)]
+        I_fh = d["I_fraunhofer"][np.ix_(sel, sel)]
+
+        # --- Máscara ---
+        ax = self.ax_ap
+        ax.clear()
+        ext_ap = d["x_ap"][-1] * 1e3
+        ax.imshow(d["mascara"], extent=[-ext_ap, ext_ap, -ext_ap, ext_ap],
+                  origin="lower", cmap="gray", vmin=0, vmax=1)
+        ax.set_title("Abertura (3 cuad. r₁ + ¼ r₂)")
+        ax.set_xlabel("x̃ [mm]")
+        ax.set_ylabel("ỹ [mm]")
+        rlim = 1.6 * max(r1, r2) * 1e3
+        ax.set_xlim(-rlim, rlim)
+        ax.set_ylim(-rlim, rlim)
+
+        # --- Fraunhofer 2D ---
+        ext = xmax * 1e3
+        ax = self.ax_fh
+        ax.clear()
+        datos, norm = _escala_norm(I_fh, self.escala.get())
+        ax.imshow(datos, extent=[-ext, ext, -ext, ext], origin="lower",
+                  cmap="inferno", norm=norm,
+                  vmax=(None if norm is not None else I_fh.max()))
+        ax.set_title("Fraunhofer (campo lejano)")
+        ax.set_xlabel("x' [mm]")
+
+        # --- Fresnel 2D ---
+        ax = self.ax_fr
+        ax.clear()
+        datos, norm = _escala_norm(I_fr, self.escala.get())
+        ax.imshow(datos, extent=[-ext, ext, -ext, ext], origin="lower",
+                  cmap="inferno", norm=norm,
+                  vmax=(None if norm is not None else I_fr.max()))
+        ax.set_title("Fresnel (campo cercano)")
+        ax.set_xlabel("x' [mm]")
+        ax.set_ylabel("y' [mm]")
+
+        # --- Perfiles comparados ---
+        ax = self.ax_prof
+        ax.clear()
+        xo = x_obs * 1e3
+        cc = I_fr.shape[0] // 2
+        ax.plot(xo, I_fr[cc, :], color="crimson", lw=1.0, label="Fresnel")
+        ax.plot(xo, I_fh[cc, :], color="steelblue", lw=0.9, label="Fraunhofer")
+        ax.set_xlim(xo[0], xo[-1])
+        ax.set_ylim(bottom=0.0)
+        ax.set_xlabel("x' [mm]  (perfil en y'=0)")
+        ax.set_ylabel("I / I_inc")
+        ax.legend(fontsize=8, loc="upper right")
+        ax.set_title("Perfiles I(x',0)")
+
+        # --- Régimen + valores axiales ---
+        D_char = 2.0 * max(r1, r2)
+        z_min, N_F, es_fh = regimen_generico(D_char, lam, z)
+        regimen_txt = ("FRAUNHOFER válido" if es_fh
+                       else "FRESNEL (campo cercano)")
+        txt = (
+            f"λ={lam*1e9:.0f}nm  z={z:.2f}m\n"
+            f"r₁={r1*1e3:.3f}  r₂={r2*1e3:.3f} mm\n"
+            f"─────────────────────────\n"
+            f"Fresnel   |U|/A={np.sqrt(I_fr_axial):5.3f}  I/I={I_fr_axial:6.3f}\n"
+            f"Fraunhofer          I/I={I_fh_axial:7.3f}\n"
+            f"─────────────────────────\n"
+            f"Régimen real: {regimen_txt}\n"
+            f"z_min=2D²/λ={z_min:.1f}m  N_F={N_F:.2f}"
+        )
+        self.status.set(txt)
+        self.status_lbl.configure(foreground="#127a12" if es_fh else "#c00000")
+
+        self.canvas.draw_idle()
+
+
 # =============================================================================
 # 4. UTILIDADES COMPARTIDAS DE DIBUJO (usadas solo por las pestañas de taller)
 # =============================================================================
@@ -1322,7 +1717,7 @@ def main():
     nb.pack(fill="both", expand=True)
 
     tab0 = ttk.Frame(nb)
-    nb.add(tab0, text="Parcial 4 — Punto 1")
+    nb.add(tab0, text="Dos aberturas")
     FraunhoferGUI(tab0)
 
     tab1 = ttk.Frame(nb)
@@ -1344,6 +1739,14 @@ def main():
     tab5 = ttk.Frame(nb)
     nb.add(tab5, text="Taller — Rendija(s) 1..N")
     TabRendijas(tab5)
+
+    tab6 = ttk.Frame(nb)
+    nb.add(tab6, text="Taller — Escalón Michelson")
+    TabEscalon(tab6)
+
+    tab7 = ttk.Frame(nb)
+    nb.add(tab7, text="Taller — Doble círculo (Fh+Fr)")
+    TabDobleCirculo(tab7)
 
     root.mainloop()
 

@@ -7,7 +7,7 @@ Tres programas interactivos para simular **patrones de difracción óptica** en 
 ### Código 20: Fraunhofer Analítico 2D ✅
 - **Ubicación:** `Codigo_1/fraunhofer_analitico.py`
 - **Objetivo:** Graficar el patrón 2D de intensidad en Fraunhofer usando la expresión analítica
-- **GUI:** tkinter con 5 pestañas (`ttk.Notebook`), cada una un ejercicio independiente. Ejecutar:
+- **GUI:** tkinter con 8 pestañas (`ttk.Notebook`), cada una un ejercicio independiente. Ejecutar:
   `python Codigo_1/fraunhofer_analitico.py`
 - **Régimen explícito:** cada pestaña muestra el número de Fresnel `N_F` y declara si el cálculo
   Fraunhofer es válido (verde) o si estás en campo cercano → usar Código 22 (rojo)
@@ -35,6 +35,18 @@ Tres programas interactivos para simular **patrones de difracción óptica** en 
   `I ∝ sinc²(a·sinθ/λ)·[sin(Nπd·sinθ/λ)/(N·sin(πd·sinθ/λ))]²`; marca los **mínimos** (rendija) u
   **órdenes principales** (red). El caso puerta-de-sonido del pto 2 (a/λ≈3.18) da mínimos en ±18.3°
   y ±39°.
+- **Escalón de Michelson** (pto 15): red de N peldaños de vidrio (espesor `h`, saliente `s`, índice
+  `n`). Cada peldaño es una rendija de ancho `s` con desfase extra `(n−1)h` por el vidrio →
+  `Δ=(n−1)h+s·senθ`. Se grafica I vs `u=s·senθ/λ` (envolvente `sinc²` × peine de red de N). El
+  término `(n−1)h` empuja los órdenes a m≈10⁴ (dispersión gigante); el lóbulo central de difracción
+  abarca `Δu=2` → caben **≈2 máximos principales** por máximo de difracción (con valores enteros de
+  `m₀=(n−1)h/λ` los vecinos caen en los ceros → órdenes faltantes).
+- **Doble círculo — Fraunhofer + Fresnel** (pto 19): disco de radio `r1` en 3 cuadrantes, extendido
+  a `r2` en el cuadrante superior-derecho. A z=2m los radios son las zonas de Fresnel 1 (r1=1mm) y 2
+  (r2=1.414mm). **Excepción** a "Código 20 = solo Fraunhofer": muestra **ambos** patrones 2D sobre la
+  misma máscara — Fraunhofer (`|𝓕|²`, axial 15.3·I) y **Fresnel** (motor `fresnel_propagate` de FFT
+  único, reutilizable por el Código 22; axial **2.25·I**, la respuesta física real ya que z=2m es
+  campo cercano). Validado headless: disco de 1 zona → 4·I, abertura del pto 19 → 1.5A / 2.25I.
 
 ### Código 21: Fraunhofer vía Transformada de Fourier (FFT 2D)
 - **Ubicación:** `Codigo_2/`
