@@ -151,24 +151,32 @@ def regimen_generico(D_char, lam, z):
     return z_min, N_F, (N_F <= NF_UMBRAL)
 
 
-# ---- Paralelogramo (lado a ‖ eje x, lado b a ángulo θ respecto de a) -------
+# ---- Rectángulo rotado (rectángulo a×b girado un ángulo θ en el plano) -----
 
-def amplitud_paralelogramo(fx, fy, a, b, theta):
+def amplitud_rectangulo_rotado(fx, fy, a, b, theta):
     """
-    TF de Fraunhofer de un paralelogramo con lado a a lo largo del eje x y
-    lado b formando ángulo θ con el lado a (fórmula genérica del
-    Contexto_códigos.md, Código 20). Si θ=90° se reduce al rectángulo a×b
-    estándar (producto de sinc independientes) — caso ya validado en la
-    Pestaña 0.
+    TF de Fraunhofer de un rectángulo de lados a×b ROTADO un ángulo θ en el
+    plano de la abertura (no es un paralelogramo cizallado: los lados siguen a
+    90°). Rotar la abertura un ángulo θ equivale a rotar el plano de
+    frecuencias el mismo ángulo — la TF de f(R_θ·r) es F(R_θ·k):
+
+        f_a =  fx·cosθ + fy·senθ      (frecuencia a lo largo del lado a)
+        f_b = -fx·senθ + fy·cosθ      (frecuencia a lo largo del lado b)
+        A   = a·b · sinc(a·f_a) · sinc(b·f_b)
+
+    En θ=0 se reduce al rectángulo alineado (a en x, b en y). El patrón sinc²
+    del rectángulo simplemente GIRA el mismo ángulo θ que la abertura.
     """
-    return a * b * np.sinc(a * fx) * np.sinc(
-        b * (fx * np.cos(theta) + fy * np.sin(theta)))
+    c, s = np.cos(theta), np.sin(theta)
+    f_a = fx * c + fy * s
+    f_b = -fx * s + fy * c
+    return a * b * np.sinc(a * f_a) * np.sinc(b * f_b)
 
 
-def intensidad_paralelogramo(X, Y, a, b, theta, lam, z):
+def intensidad_rectangulo_rotado(X, Y, a, b, theta, lam, z):
     fx = X / (lam * z)
     fy = Y / (lam * z)
-    A = amplitud_paralelogramo(fx, fy, a, b, theta)
+    A = amplitud_rectangulo_rotado(fx, fy, a, b, theta)
     I0 = (a * b) ** 2
     I = A ** 2 / I0 if I0 > 0.0 else A ** 2
     return np.clip(I, 0.0, None)
@@ -204,28 +212,19 @@ def intensidad_cruz(X, Y, L, a, lam, z):
     return np.clip(I, 0.0, None)
 
 
-# ---- Círculo con muesca (segmento circular cortado) ------------------------
+# ---- Dos semicírculos (mitad superior r1, mitad inferior r2) ---------------
 
-def area_circulo_con_muesca(R, ancho_muesca):
+def area_dos_semicirculos(r1, r2):
     """
-    Área del círculo de radio R al que se le remueve el segmento circular
-    inferior cuya cuerda tiene ancho `ancho_muesca` (≤ 2R).
+    Área de la abertura formada por un semicírculo SUPERIOR (y≥0) de radio r1
+    unido a un semicírculo INFERIOR (y<0) de radio r2, compartiendo el diámetro
+    horizontal:
 
-    Geometría: la cuerda a altura y0=-h (h>0) tiene semi-ancho
-    √(R²−h²) = ancho_muesca/2  →  h = √(R² − (ancho_muesca/2)²).
-    Ángulo central del segmento: φ = 2·arccos(h/R).
-    Área del segmento = R²/2·(φ − sen φ).  Área final = πR² − segmento.
+        Área = π·r1²/2 + π·r2²/2 = π·(r1² + r2²)/2
 
-    Con R=1mm y ancho_muesca=√2 mm≈1.414mm (caso del enunciado) da φ=π/2
-    exactamente (la cuerda está a 45°) y Área ≈ 2.8562 mm².
+    Casos límite:  r1=r2 → círculo completo (π·r²);  r2=0 → un solo semicírculo.
     """
-    semi = ancho_muesca / 2.0
-    if semi <= 0.0 or semi >= R:
-        return np.pi * R ** 2
-    h = np.sqrt(max(R ** 2 - semi ** 2, 0.0))
-    phi = 2.0 * np.arccos(np.clip(h / R, -1.0, 1.0))
-    segmento = 0.5 * R ** 2 * (phi - np.sin(phi))
-    return np.pi * R ** 2 - segmento
+    return np.pi * (r1 ** 2 + r2 ** 2) / 2.0
 
 
 def irradiancia_axial_relativa(area, lam, z):
@@ -244,36 +243,35 @@ def irradiancia_axial_relativa(area, lam, z):
     return (area / (lam * z)) ** 2
 
 
-def mascara_circulo_muesca(X, Y, R, ancho_muesca):
+def mascara_dos_semicirculos(X, Y, r1, r2):
     """
-    Máscara booleana (True=transparente) del círculo con el segmento inferior
-    recortado, sobre la malla (X,Y) del PLANO DE LA ABERTURA [m]. Se usa solo
-    para la visualización NUMÉRICA del patrón 2D (FFT) — el valor axial
-    cerrado se calcula aparte con `area_circulo_con_muesca` (método analítico).
+    Máscara booleana (True=transparente) de la abertura de dos semicírculos:
+    semicírculo superior (y≥0) de radio r1 y semicírculo inferior (y<0) de
+    radio r2, sobre la malla (X,Y) del PLANO DE LA ABERTURA [m]. Se usa solo
+    para la visualización NUMÉRICA del patrón 2D (FFT); el valor axial cerrado
+    se calcula aparte con `area_dos_semicirculos` (método analítico).
     """
-    semi = ancho_muesca / 2.0
-    h = np.sqrt(max(R ** 2 - semi ** 2, 0.0)) if semi < R else 0.0
-    dentro_circulo = (X ** 2 + Y ** 2) <= R ** 2
-    fuera_muesca = Y >= -h
-    return dentro_circulo & fuera_muesca
+    superior = (Y >= 0.0) & (X ** 2 + Y ** 2 <= r1 ** 2)
+    inferior = (Y < 0.0) & (X ** 2 + Y ** 2 <= r2 ** 2)
+    return superior | inferior
 
 
-RESOLUCION_ABERTURA = 60  # muestras deseadas a través de max(R, ancho_muesca)
+RESOLUCION_ABERTURA = 60  # muestras deseadas a través de max(r1, r2)
 
 
-def patron_fft_muesca(R, ancho_muesca, lam, z, xmax, N):
+def patron_fft_semicirculos(r1, r2, lam, z, xmax, N):
     """
-    Patrón de Fraunhofer NUMÉRICO (no analítico) de la abertura círculo-con-
-    muesca, vía `fft2`.
+    Patrón de Fraunhofer NUMÉRICO (no analítico) de la abertura de dos
+    semicírculos, vía `fft2`.
 
     La resolución en el plano de OBSERVACIÓN es  dx' = λz/L_ap  — depende
     solo de la ventana física de la abertura `L_ap`, NO de N. Para que el
     slider N sirva realmente para "ver más fino" (en vez de solo extender el
     rango), se fija primero una resolución de muestreo de la ABERTURA
-    (dx_ap = max(R,muesca)/RESOLUCION_ABERTURA) y se hace crecer la ventana
+    (dx_ap = max(r1,r2)/RESOLUCION_ABERTURA) y se hace crecer la ventana
     con N:  L_ap = N·dx_ap  (equivale a "zero-padding": más N ⇒ ventana más
     grande ⇒ dx' más fino, la interpolación estándar de la FFT). Se impone
-    además un piso  L_ap ≥ 4×max(R,muesca)  para no recortar la abertura
+    además un piso  L_ap ≥ 4×max(r1,r2)  para no recortar la abertura
     cuando N está en su valor mínimo.
 
     El slider `xmax` solo RECORTA el rango ya calculado — pedir un `xmax`
@@ -282,14 +280,15 @@ def patron_fft_muesca(R, ancho_muesca, lam, z, xmax, N):
 
     Devuelve (x_obs [m] recortado, I2D_rel recortado, máscara, x_ap [m]).
     """
-    dx_ap_objetivo = max(R, ancho_muesca) / RESOLUCION_ABERTURA
-    margen_min = 4.0 * max(R, ancho_muesca)
+    r_max = max(r1, r2)
+    dx_ap_objetivo = r_max / RESOLUCION_ABERTURA
+    margen_min = 4.0 * r_max
     L_ap = max(margen_min, N * dx_ap_objetivo)
 
     x_ap = np.linspace(-L_ap / 2, L_ap / 2, N, endpoint=False)
     dx_ap = x_ap[1] - x_ap[0]
     Xap, Yap = np.meshgrid(x_ap, x_ap)
-    mascara = mascara_circulo_muesca(Xap, Yap, R, ancho_muesca).astype(float)
+    mascara = mascara_dos_semicirculos(Xap, Yap, r1, r2).astype(float)
 
     U = np.fft.fftshift(np.fft.fft2(np.fft.ifftshift(mascara)))
     U *= dx_ap * dx_ap / (lam * z)          # escala de Riemann + prefactor 1/(λz)
@@ -332,6 +331,61 @@ def intensidad_doble_cuadrado(X, Y, a, lam, z):
     I0 = area_total ** 2
     I = I / I0 if I0 > 0.0 else I
     return np.clip(I, 0.0, None), D
+
+
+# ---- Rendija(s): 1 a N ranuras (rendija simple y red de difracción) --------
+
+def intensidad_rendijas(sin_theta, a_lam, d_lam, N):
+    """
+    Patrón de Fraunhofer de N rendijas verticales idénticas (idealizadas como
+    infinitas en y), de ancho de ranura a y período d (separación centro-a-
+    centro), en función de sinθ (adimensional). Todo se parametriza por los
+    cocientes a/λ y d/λ, así el mismo modelo sirve para LUZ o SONIDO sin
+    importar la escala absoluta:
+
+        u = (a/λ)·sinθ                              (ancho en longitudes de onda)
+        v = (d/λ)·sinθ                              (período en longitudes de onda)
+        I = sinc²(u) · [ sin(Nπv) / (N·sin(πv)) ]²
+
+    · Primer factor: envolvente de UNA rendija → mínimos en sinθ = m·λ/a.
+    · Segundo factor: factor de red → máximos principales en sinθ = m·λ/d
+      (orden m). Para N=1 vale 1 y queda la rendija simple.
+
+    Normalizada a I(0)=1.
+    """
+    u = a_lam * sin_theta
+    env = np.sinc(u) ** 2                        # sinc normalizada de numpy
+    if N <= 1:
+        return np.clip(env, 0.0, None)
+    v = d_lam * sin_theta
+    num = np.sin(N * np.pi * v)
+    den = N * np.sin(np.pi * v)
+    # En los máximos principales den→0 y el cociente → ±1 (límite de L'Hôpital).
+    den_safe = np.where(np.abs(den) < 1e-9, 1.0, den)
+    red = np.where(np.abs(den) < 1e-9, 1.0, (num / den_safe) ** 2)
+    return np.clip(env * red, 0.0, None)
+
+
+def angulos_minimos_rendija(a_lam, m_max=3):
+    """Ángulos (grados) de los primeros mínimos de una rendija: sinθ=m·λ/a."""
+    angs = []
+    for m in range(1, m_max + 1):
+        s = m / a_lam
+        if s <= 1.0:
+            angs.append((m, np.degrees(np.arcsin(s))))
+    return angs
+
+
+def ordenes_red(d_lam, sin_max=1.0, m_max=20):
+    """Órdenes principales visibles de la red: sinθ=m·λ/d con |sinθ|≤sin_max."""
+    ordenes = []
+    for m in range(0, m_max + 1):
+        s = m / d_lam
+        if s <= sin_max:
+            ordenes.append((m, np.degrees(np.arcsin(s))))
+        else:
+            break
+    return ordenes
 
 
 # =============================================================================
@@ -595,8 +649,8 @@ class FraunhoferGUI:
 # 3. PESTAÑAS DE TALLER
 # =============================================================================
 
-class TabParalelogramo:
-    """Ejercicio: paralelogramo a=10µm, b=5µm, θ=60° (fórmula genérica Código 20)."""
+class TabRectanguloRotado:
+    """Ejercicio (taller pto 3): rectángulo a=10µm, b=5µm ROTADO θ=60° en el plano."""
 
     def __init__(self, parent):
         self.parent = parent
@@ -607,14 +661,16 @@ class TabParalelogramo:
     def _build_controls(self):
         panel = ttk.Frame(self.parent, padding=8)
         panel.pack(side="left", fill="y")
-        ttk.Label(panel, text="Paralelogramo (a ‖ x, b a ángulo θ)",
+        ttk.Label(panel, text="Rectángulo rotado (lados a×b, giro θ)",
                   font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
 
         f1 = ttk.LabelFrame(panel, text="Abertura (µm)", padding=6)
         f1.pack(fill="x", pady=4)
-        self.a = crear_slider(f1, "a", 1.0, 50.0, 10.0, self.recompute, "{:.2f}")
-        self.b = crear_slider(f1, "b", 1.0, 50.0, 5.0, self.recompute, "{:.2f}")
-        self.theta = crear_slider(f1, "θ (grados)", 0.0, 180.0, 60.0,
+        self.a = crear_slider(f1, "a (lado en x)", 1.0, 50.0, 10.0,
+                              self.recompute, "{:.2f}")
+        self.b = crear_slider(f1, "b (lado en y)", 1.0, 50.0, 5.0,
+                              self.recompute, "{:.2f}")
+        self.theta = crear_slider(f1, "θ giro (grados)", 0.0, 180.0, 60.0,
                                   self.recompute, "{:.1f}")
 
         f3 = ttk.LabelFrame(panel, text="Fuente / observación", padding=6)
@@ -662,22 +718,22 @@ class TabParalelogramo:
 
         x = np.linspace(-xmax, xmax, N)
         X, Y = np.meshgrid(x, x)
-        I = intensidad_paralelogramo(X, Y, a, b, theta, lam, z)
+        I = intensidad_rectangulo_rotado(X, Y, a, b, theta, lam, z)
 
-        # --- Abertura a escala ---
+        # --- Abertura a escala (rectángulo con esquinas a 90°, girado θ) ---
         ax = self.ax_ap
         ax.clear()
         um = 1e6
         av, bv = a * um, b * um
-        verts = np.array([(0, 0), (av, 0),
-                          (av + bv * np.cos(theta), bv * np.sin(theta)),
-                          (bv * np.cos(theta), bv * np.sin(theta))])
-        centro = verts.mean(axis=0)
-        verts = verts - centro
+        c, s = np.cos(theta), np.sin(theta)
+        R = np.array([[c, -s], [s, c]])
+        esquinas = np.array([(-av / 2, -bv / 2), (av / 2, -bv / 2),
+                             (av / 2, bv / 2), (-av / 2, bv / 2)])
+        verts = esquinas @ R.T
         ax.set_facecolor("#111111")
         from matplotlib.patches import Polygon
         ax.add_patch(Polygon(verts, closed=True, facecolor="white", edgecolor="none"))
-        semi = max(av, bv) * 1.3
+        semi = max(av, bv) * 1.1
         ax.set_xlim(-semi, semi)
         ax.set_ylim(-semi, semi)
         ax.set_aspect("equal")
@@ -695,7 +751,7 @@ class TabParalelogramo:
                   vmax=(None if norm is not None else max(I.max(), 1e-12)))
         ax.set_xlabel("x'  [mm]")
         ax.set_ylabel("y'  [mm]")
-        ax.set_title("Fraunhofer analítico — paralelogramo (sinc²)")
+        ax.set_title("Fraunhofer analítico — rectángulo rotado (sinc² girado θ)")
 
         # --- Perfil ---
         ax = self.ax_prof
@@ -836,13 +892,16 @@ class TabCruz:
         self.canvas.draw_idle()
 
 
-class TabCirculoMuesca:
+class TabDosSemicirculos:
     """
-    Ejercicio: círculo D=2mm (R=1mm) con muesca rectangular de ancho 1.414mm
-    (≈R√2, cuerda a 45°). Pide la irradiancia AXIAL en z=4m, λ=500nm — se
-    calcula de forma CERRADA (analítica) y además se visualiza el patrón 2D
-    de forma NUMÉRICA (FFT de la máscara rasterizada), declarando en pantalla
-    que ese panel usa un método distinto (numérico) al resto de pestañas.
+    Ejercicio (taller pto 9): abertura de DOS SEMICÍRCULOS — mitad superior de
+    radio r1 y mitad inferior de radio r2 (unidas por el diámetro). Casos
+    límite: r1=r2 → círculo (Airy); r2=0 → un solo semicírculo.
+
+    Pide la irradiancia AXIAL en z=4m, λ=500nm — se calcula de forma CERRADA
+    (analítica, vía el área) y además se visualiza el patrón 2D de forma
+    NUMÉRICA (FFT de la máscara rasterizada), declarando en pantalla que ese
+    panel usa un método distinto (numérico) al resto de pestañas.
     """
 
     def __init__(self, parent):
@@ -854,21 +913,22 @@ class TabCirculoMuesca:
     def _build_controls(self):
         panel = ttk.Frame(self.parent, padding=8)
         panel.pack(side="left", fill="y")
-        ttk.Label(panel, text="Círculo con muesca",
+        ttk.Label(panel, text="Dos semicírculos (r1 arriba, r2 abajo)",
                   font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
 
         f1 = ttk.LabelFrame(panel, text="Abertura (mm)", padding=6)
         f1.pack(fill="x", pady=4)
-        self.R = crear_slider(f1, "R  radio", 0.1, 5.0, 1.0, self.recompute, "{:.3f}")
-        self.muesca = crear_slider(f1, "ancho muesca", 0.05, 2.0, 1.41421,
-                                   self.recompute, "{:.3f}")
+        self.r1 = crear_slider(f1, "r1  (superior)", 0.0, 5.0, 2.0,
+                               self.recompute, "{:.3f}")
+        self.r2 = crear_slider(f1, "r2  (inferior)", 0.0, 5.0, 1.41421,
+                               self.recompute, "{:.3f}")
 
         f3 = ttk.LabelFrame(panel, text="Fuente / observación", padding=6)
         f3.pack(fill="x", pady=4)
         self.lam = crear_slider(f3, "λ (nm)", 380.0, 1000.0, 500.0,
                                 self.recompute, "{:.0f}")
         self.z = crear_slider(f3, "z (m)", 0.1, 20.0, 4.0, self.recompute, "{:.2f}")
-        self.xmax = crear_slider(f3, "x'_max (mm)", 0.5, 100.0, 5.0,
+        self.xmax = crear_slider(f3, "x'_max (mm)", 0.5, 100.0, 4.0,
                                  self.recompute, "{:.2f}")
         self.N = crear_slider(f3, "N (px, FFT)", 128.0, float(NX_MAX), 800.0,
                               self.recompute, "{:.0f}")
@@ -902,14 +962,15 @@ class TabCirculoMuesca:
         NavigationToolbar2Tk(self.canvas, right).update()
 
     def recompute(self):
-        R = self.R.get() * 1e-3
-        muesca = min(self.muesca.get() * 1e-3, 2.0 * R * 0.999)
+        r1, r2 = self.r1.get() * 1e-3, self.r2.get() * 1e-3
         lam, z = self.lam.get() * 1e-9, self.z.get()
         xmax, N = self.xmax.get() * 1e-3, int(self.N.get())
+        if max(r1, r2) <= 0.0:
+            return
 
-        area = area_circulo_con_muesca(R, muesca)
+        area = area_dos_semicirculos(r1, r2)
         I0_axial = irradiancia_axial_relativa(area, lam, z)
-        x_obs, I2D, mascara, x_ap = patron_fft_muesca(R, muesca, lam, z, xmax, N)
+        x_obs, I2D, mascara, x_ap = patron_fft_semicirculos(r1, r2, lam, z, xmax, N)
 
         # Valor central del FFT (validación cruzada contra el cerrado).
         j0 = np.argmin(np.abs(x_obs))
@@ -921,11 +982,13 @@ class TabCirculoMuesca:
         ext_ap = x_ap[-1] * 1e3
         ax.imshow(mascara, extent=[-ext_ap, ext_ap, -ext_ap, ext_ap],
                   origin="lower", cmap="gray", vmin=0, vmax=1)
+        ax.axhline(0.0, color="orange", lw=0.6, ls=":")  # línea del diámetro común
         ax.set_xlabel("x̃  [mm]")
         ax.set_ylabel("ỹ  [mm]")
         ax.set_title("Máscara de la abertura (rasterizada)")
-        ax.set_xlim(-3.5 * R * 1e3, 3.5 * R * 1e3)
-        ax.set_ylim(-3.5 * R * 1e3, 3.5 * R * 1e3)
+        rlim = 3.5 * max(r1, r2) * 1e3
+        ax.set_xlim(-rlim, rlim)
+        ax.set_ylim(-rlim, rlim)
 
         # --- Patrón 2D (NUMÉRICO, FFT) ---
         ax = self.ax_pat
@@ -1089,6 +1152,132 @@ class TabDobleCuadrado:
 
 
 # =============================================================================
+class TabRendijas:
+    """
+    Ejercicio (taller ptos 2 y 6): rendija simple (N=1) y red de difracción de
+    N rendijas. Parametrizado por a/λ y d/λ (adimensionales), así el patrón
+    angular sirve tanto para LUZ como para SONIDO. Se grafica I vs ángulo θ.
+    """
+
+    def __init__(self, parent):
+        self.parent = parent
+        self._build_controls()
+        self._build_figure()
+        self.recompute()
+
+    def _build_controls(self):
+        panel = ttk.Frame(self.parent, padding=8)
+        panel.pack(side="left", fill="y")
+        ttk.Label(panel, text="Rendija(s): 1 a N ranuras",
+                  font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
+
+        f1 = ttk.LabelFrame(panel, text="Red (adimensional)", padding=6)
+        f1.pack(fill="x", pady=4)
+        self.N = crear_slider(f1, "N (nº ranuras)", 1.0, 40.0, 1.0,
+                              self.recompute, "{:.0f}")
+        self.a_lam = crear_slider(f1, "a/λ (ancho)", 0.5, 100.0, 3.18,
+                                  self.recompute, "{:.2f}")
+        self.d_a = crear_slider(f1, "d/a (período/ancho)", 1.0, 10.0, 3.0,
+                                self.recompute, "{:.2f}")
+
+        f2 = ttk.LabelFrame(panel, text="Rango / visualización", padding=6)
+        f2.pack(fill="x", pady=4)
+        self.tmax = crear_slider(f2, "θ_max (grados)", 5.0, 90.0, 80.0,
+                                 self.recompute, "{:.0f}")
+
+        info = ttk.LabelFrame(panel, text="Ayuda (unidades)", padding=6)
+        info.pack(fill="x", pady=4)
+        ttk.Label(info, justify="left", font=("Consolas", 8), text=(
+            "a/λ = ancho de ranura en\n"
+            "  longitudes de onda.\n"
+            "Sonido (pto 2): W=0.84 m,\n"
+            "  λ=343/1300=0.264 m →\n"
+            "  a/λ ≈ 3.18.\n"
+            "N=1 → rendija simple.")).pack(anchor="w")
+
+        st = ttk.LabelFrame(panel, text="Mínimos / órdenes", padding=6)
+        st.pack(fill="x", pady=4)
+        self.status = tk.StringVar(value="")
+        self.status_lbl = ttk.Label(st, textvariable=self.status, justify="left",
+                                    font=("Consolas", 9))
+        self.status_lbl.pack(anchor="w")
+
+    def _build_figure(self):
+        right = ttk.Frame(self.parent)
+        right.pack(side="left", fill="both", expand=True)
+        self.fig = Figure(figsize=(10.5, 8.0))
+        gs = self.fig.add_gridspec(2, 1, hspace=0.32, height_ratios=[1, 1.2])
+        self.ax_pat = self.fig.add_subplot(gs[0, 0])   # patrón 2D (franjas)
+        self.ax_prof = self.fig.add_subplot(gs[1, 0])  # perfil I(θ)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        NavigationToolbar2Tk(self.canvas, right).update()
+
+    def recompute(self):
+        N = int(self.N.get())
+        a_lam = self.a_lam.get()
+        d_lam = self.d_a.get() * a_lam        # d/λ = (d/a)·(a/λ)
+        tmax = np.radians(self.tmax.get())
+
+        theta = np.linspace(-tmax, tmax, 4000)
+        st = np.sin(theta)
+        I = intensidad_rendijas(st, a_lam, d_lam, N)
+        theta_deg = np.degrees(theta)
+
+        # --- Patrón 2D (franjas verticales: rendijas idealizadas ∞ en y) ---
+        ax = self.ax_pat
+        ax.clear()
+        img = np.tile(I, (60, 1))
+        ax.imshow(img, extent=[theta_deg[0], theta_deg[-1], -1, 1],
+                  origin="lower", cmap="inferno", aspect="auto",
+                  vmax=max(I.max(), 1e-12))
+        ax.set_yticks([])
+        ax.set_xlabel("θ  [grados]")
+        titulo = ("Rendija simple (N=1)" if N <= 1
+                  else f"Red de {N} rendijas (a/λ={a_lam:.2f}, d/a={self.d_a.get():.1f})")
+        ax.set_title("Fraunhofer — " + titulo)
+
+        # --- Perfil I(θ) con envolvente de una rendija ---
+        ax = self.ax_prof
+        ax.clear()
+        ax.plot(theta_deg, I, color="crimson", lw=1.0, label="I(θ)")
+        env = np.sinc(a_lam * st) ** 2
+        ax.plot(theta_deg, env, color="steelblue", lw=0.9, ls="--",
+                label="envolvente de 1 rendija")
+        ax.fill_between(theta_deg, I, alpha=0.15, color="crimson")
+        ax.set_xlim(theta_deg[0], theta_deg[-1])
+        ax.set_ylim(bottom=0.0)
+        ax.set_xlabel("θ  [grados]")
+        ax.set_ylabel("I / I₀")
+        ax.legend(fontsize=8, loc="upper right")
+        ax.set_title("Perfil de intensidad  I(θ)")
+
+        # --- Mínimos (rendija) / órdenes (red) ---
+        if N <= 1:
+            mins = angulos_minimos_rendija(a_lam, m_max=4)
+            líneas = "\n".join(f"  mín m={m}: θ = ±{ang:5.2f}°" for m, ang in mins)
+            for _, ang in mins:
+                for signo in (+1, -1):
+                    ax.axvline(signo * ang, color="navy", lw=0.6, ls=":")
+            txt = (f"RENDIJA SIMPLE (N=1)\n"
+                   f"a/λ = {a_lam:.3f}\n"
+                   f"Mínimos  sinθ = m·λ/a:\n{líneas}")
+        else:
+            ords = ordenes_red(d_lam, sin_max=np.sin(tmax))
+            líneas = "\n".join(f"  orden m={m}: θ = ±{ang:5.2f}°" for m, ang in ords)
+            for _, ang in ords:
+                for signo in (+1, -1):
+                    ax.axvline(signo * ang, color="seagreen", lw=0.5, ls=":")
+            txt = (f"RED de N={N} rendijas\n"
+                   f"a/λ = {a_lam:.2f}   d/λ = {d_lam:.2f}\n"
+                   f"Máx. principales  sinθ = m·λ/d:\n{líneas}")
+        self.status.set(txt)
+        self.status_lbl.configure(foreground="#333333")
+
+        self.canvas.draw_idle()
+
+
+# =============================================================================
 # 4. UTILIDADES COMPARTIDAS DE DIBUJO (usadas solo por las pestañas de taller)
 # =============================================================================
 
@@ -1137,20 +1326,24 @@ def main():
     FraunhoferGUI(tab0)
 
     tab1 = ttk.Frame(nb)
-    nb.add(tab1, text="Taller — Paralelogramo")
-    TabParalelogramo(tab1)
+    nb.add(tab1, text="Taller — Rectángulo rotado")
+    TabRectanguloRotado(tab1)
 
     tab2 = ttk.Frame(nb)
     nb.add(tab2, text="Taller — Cruz")
     TabCruz(tab2)
 
     tab3 = ttk.Frame(nb)
-    nb.add(tab3, text="Taller — Círculo con muesca")
-    TabCirculoMuesca(tab3)
+    nb.add(tab3, text="Taller — Dos semicírculos")
+    TabDosSemicirculos(tab3)
 
     tab4 = ttk.Frame(nb)
     nb.add(tab4, text="Taller — Doble cuadrado")
     TabDobleCuadrado(tab4)
+
+    tab5 = ttk.Frame(nb)
+    nb.add(tab5, text="Taller — Rendija(s) 1..N")
+    TabRendijas(tab5)
 
     root.mainloop()
 
