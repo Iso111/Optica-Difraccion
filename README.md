@@ -7,12 +7,28 @@ Tres programas interactivos para simular **patrones de difracción óptica** en 
 ### Código 20: Fraunhofer Analítico 2D ✅
 - **Ubicación:** `Codigo_1/fraunhofer_analitico.py`
 - **Objetivo:** Graficar el patrón 2D de intensidad en Fraunhofer usando la expresión analítica
-- **Abertura (figura del punto 1):** marco rectangular (`a×b − c×d`) + círculo (`R`), separados `D`
+- **GUI:** tkinter con 5 pestañas (`ttk.Notebook`), cada una un ejercicio independiente. Ejecutar:
+  `python Codigo_1/fraunhofer_analitico.py`
+- **Régimen explícito:** cada pestaña muestra el número de Fresnel `N_F` y declara si el cálculo
+  Fraunhofer es válido (verde) o si estás en campo cercano → usar Código 22 (rojo)
+
+**Pestaña "Parcial 4 — Punto 1":**
+- **Abertura:** marco rectangular (`a×b − c×d`) + círculo (`R`), separados `D`
 - **Expresión:** `I = A_marco² + A_círc² + 2·A_marco·A_círc·cos(2πD·x'/λz)` (franjas de interferencia)
-- **Régimen explícito:** muestra el número de Fresnel `N_F` y declara si el cálculo Fraunhofer es
-  válido (verde) o si estás en campo cercano → usar Código 22 (rojo)
 - **Casos degenerados** para validar: rectángulo `sinc²` (`c=d=R=0`), disco de Airy (`a=b=c=d=0`)
-- **GUI:** tkinter interactivo con sliders en caliente. Ejecutar: `python Codigo_1/fraunhofer_analitico.py`
+
+**Pestañas de taller** (ejercicios adicionales del curso):
+- **Paralelogramo** (a=10µm, b=5µm, θ=60°): fórmula genérica del `Contexto_códigos.md`
+  (`I ∝ sinc²(a·x'/λz)·sinc²(b·(x'cosθ+y'senθ)/λz)`); validado contra el rectángulo cuando θ=90°.
+- **Cruz** (brazos de ancho `a`, largo total `L`): unión de dos barras vía inclusión-exclusión de
+  conjuntos (`A_cruz = A_h + A_v − A_solape`); validado contra un cuadrado sólido cuando a=L.
+- **Círculo con muesca** (D=2mm, corte de 1.414mm≈R√2, cuerda a 45°): calcula la **irradiancia
+  axial cerrada** `I(0,0)=I₀·(Área/λz)²` pedida por el enunciado (área vía geometría de segmento
+  circular) y además visualiza el **patrón 2D numérico** (FFT de la abertura rasterizada,
+  explícitamente marcado como método distinto al resto de pestañas); ambos se validan cruzados
+  entre sí (<1% de diferencia).
+- **Doble cuadrado** (lados `a` y `3a`, separados `2a` borde a borde → `D=4a`): misma física de dos
+  aberturas + interferencia que la Pestaña 0, con envolventes cuadradas.
 
 ### Código 21: Fraunhofer vía Transformada de Fourier (FFT 2D)
 - **Ubicación:** `Codigo_2/`
