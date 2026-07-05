@@ -4,11 +4,15 @@ Tres programas interactivos para simular **patrones de difracción óptica** en 
 
 ## Proyectos
 
-### Código 20: Fraunhofer Analítico 2D
-- **Ubicación:** `Codigo_1/`
-- **Objetivo:** Graficar el patrón 2D de intensidad en Fraunhofer usando fórmulas analíticas (`sinc²`)
-- **Aberturas:** Paralelogramo/rectángulo parametrizables
-- **Validación:** Verifica condición de campo lejano: `z ≥ 2D²/λ`
+### Código 20: Fraunhofer Analítico 2D ✅
+- **Ubicación:** `Codigo_1/fraunhofer_analitico.py`
+- **Objetivo:** Graficar el patrón 2D de intensidad en Fraunhofer usando la expresión analítica
+- **Abertura (figura del punto 1):** marco rectangular (`a×b − c×d`) + círculo (`R`), separados `D`
+- **Expresión:** `I = A_marco² + A_círc² + 2·A_marco·A_círc·cos(2πD·x'/λz)` (franjas de interferencia)
+- **Régimen explícito:** muestra el número de Fresnel `N_F` y declara si el cálculo Fraunhofer es
+  válido (verde) o si estás en campo cercano → usar Código 22 (rojo)
+- **Casos degenerados** para validar: rectángulo `sinc²` (`c=d=R=0`), disco de Airy (`a=b=c=d=0`)
+- **GUI:** tkinter interactivo con sliders en caliente. Ejecutar: `python Codigo_1/fraunhofer_analitico.py`
 
 ### Código 21: Fraunhofer vía Transformada de Fourier (FFT 2D)
 - **Ubicación:** `Codigo_2/`
