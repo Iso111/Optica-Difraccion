@@ -1227,75 +1227,6 @@ def render_redes_cascada(fig, p, modo):
 
 
 # =============================================================================
-# 4B. PERFIL DE INTENSIDAD ABSOLUTA (sin normalizar) — corte y'=0
-#    abs_*(p) → (x' [m], I_abs, I_norm), con I_abs = |U|² relativa a la onda
-#    plana incidente (amplitud 1): centro Fraunhofer = (Área/λz)². Para las
-#    analíticas se escala la I normalizada del núcleo por (Área/λz)²; para las
-#    numéricas (FFT) el patrón ya viene en esa escala absoluta.
-# =============================================================================
-
-def abs_marco_circulo(p):
-    x = np.linspace(-p["xmax"], p["xmax"], int(p["N"]))
-    I_norm = intensidad(x, np.zeros_like(x), p)
-    A0 = p["a"] * p["b"] - p["c"] * p["d"] + np.pi * p["R"] ** 2
-    k = (A0 / (p["lam"] * p["z"])) ** 2
-    return x, I_norm * k, I_norm
-
-
-def abs_rectangulo_rotado(p):
-    x = np.linspace(-p["xmax"], p["xmax"], int(p["N"]))
-    I_norm = intensidad_rectangulo_rotado(x, np.zeros_like(x), p["a"], p["b"],
-                                          p["theta"], p["lam"], p["z"])
-    k = ((p["a"] * p["b"]) / (p["lam"] * p["z"])) ** 2
-    return x, I_norm * k, I_norm
-
-
-def abs_cruz(p):
-    L, a = p["L"], min(p["a"], p["L"])
-    x = np.linspace(-p["xmax"], p["xmax"], int(p["N"]))
-    I_norm = intensidad_cruz(x, np.zeros_like(x), L, a, p["lam"], p["z"])
-    area = 2.0 * L * a - a * a
-    k = (area / (p["lam"] * p["z"])) ** 2
-    return x, I_norm * k, I_norm
-
-
-def abs_doble_cuadrado(p):
-    x = np.linspace(-p["xmax"], p["xmax"], int(p["N"]))
-    I_norm, _ = intensidad_doble_cuadrado(x, np.zeros_like(x), p["a"],
-                                          p["lam"], p["z"])
-    area = 10.0 * p["a"] ** 2
-    k = (area / (p["lam"] * p["z"])) ** 2
-    return x, I_norm * k, I_norm
-
-
-def abs_dos_semicirculos(p):
-    x_obs, I2D, _, _ = patron_fft_semicirculos(
-        p["r1"], p["r2"], p["lam"], p["z"], p["xmax"], int(p["N"]))
-    if not I2D.size:
-        z = np.zeros(1)
-        return z, z, z
-    j = I2D.shape[0] // 2
-    I_abs = I2D[j, :]                       # ya absoluto (|U|², I0 incidente=1)
-    axial = I_abs[np.argmin(np.abs(x_obs))]
-    I_norm = I_abs / axial if axial > 0 else I_abs
-    return x_obs, I_abs, I_norm
-
-
-def abs_doble_circulo(p):
-    d = patrones_doble_circulo(p["r1"], p["r2"], p["lam"], p["z"], int(p["N"]))
-    xo = d["x_obs"]
-    sel = np.abs(xo) <= p["xmax"]
-    xo = xo[sel]
-    Ifh = d["I_fraunhofer"][np.ix_(sel, sel)]  # ya absoluto (campo lejano)
-    cc = Ifh.shape[0] // 2
-    I_abs = Ifh[cc, :]
-    N = int(p["N"])
-    axial = d["I_fraunhofer"][N // 2, N // 2]
-    I_norm = I_abs / axial if axial > 0 else I_abs
-    return xo, I_abs, I_norm
-
-
-# =============================================================================
 # 5. REGISTRO DE ABERTURAS
 #    nombre → dict(titulo, sliders, usa_escala, render, expr [, status_titulo, abs])
 #    sliders: lista de (clave, label, frm, to, init, escala_a_SI, fmt)
@@ -1323,7 +1254,6 @@ APERTURAS_20 = {
             ("N", "N (px)", 200.0, float(NX_MAX), 500.0, 1.0, "{:.0f}"),
         ],
         "render": render_marco_circulo,
-        "abs": abs_marco_circulo,
         "expr": ("I = A_marco² + A_círc² + 2·A_marco·A_círc·cos(2πD·fx)\n"
                  "A_marco = ab·sinc(a·fx)sinc(b·fy) − cd·sinc(c·fx)sinc(d·fy)\n"
                  "A_círc  = πR²·2J₁(2πRρ)/(2πRρ)"),
@@ -1341,7 +1271,6 @@ APERTURAS_20 = {
             ("N", "N (px)", 200.0, float(NX_MAX), 500.0, 1.0, "{:.0f}"),
         ],
         "render": render_rectangulo_rotado,
-        "abs": abs_rectangulo_rotado,
         "expr": ("I = sinc²(a·f_a)·sinc²(b·f_b)\n"
                  "f_a = fx·cosθ + fy·senθ    f_b = −fx·senθ + fy·cosθ"),
     },
@@ -1357,7 +1286,6 @@ APERTURAS_20 = {
             ("N", "N (px)", 200.0, float(NX_MAX), 500.0, 1.0, "{:.0f}"),
         ],
         "render": render_cruz,
-        "abs": abs_cruz,
         "expr": ("I = |La·sinc(L·fx)sinc(a·fy) + aL·sinc(a·fx)sinc(L·fy)\n"
                  "     − a²·sinc(a·fx)sinc(a·fy)|² / (2La − a²)²"),
     },
@@ -1374,7 +1302,6 @@ APERTURAS_20 = {
             ("N", "N (px, FFT)", 128.0, float(NX_MAX), 800.0, 1.0, "{:.0f}"),
         ],
         "render": render_dos_semicirculos,
-        "abs": abs_dos_semicirculos,
         "expr": ("Numérico (FFT de la máscara). Axial:\n"
                  "I(0,0)/I₀ = (Área/λz)²,  Área = π(r1²+r2²)/2"),
     },
@@ -1389,7 +1316,6 @@ APERTURAS_20 = {
             ("N", "N (px)", 200.0, float(NX_MAX), 500.0, 1.0, "{:.0f}"),
         ],
         "render": render_doble_cuadrado,
-        "abs": abs_doble_cuadrado,
         "expr": ("I = A1² + A2² + 2A1A2·cos(2πD·fx),  D = 4a\n"
                  "A1 = a²·sinc(a·fx)sinc(a·fy)\n"
                  "A2 = 9a²·sinc(3a·fx)sinc(3a·fy)"),
@@ -1436,7 +1362,6 @@ APERTURAS_20 = {
             ("N", "N (px, FFT)", 256.0, 2048.0, 1024.0, 1.0, "{:.0f}"),
         ],
         "render": render_doble_circulo,
-        "abs": abs_doble_circulo,
         "expr": ("Numérico (FFT). Fraunhofer axial (Área/λz)²;\n"
                  "Fresnel vía zonas. Área = ¾πr1² + ¼πr2²"),
     },
@@ -1551,132 +1476,12 @@ class HostFraunhofer:
         self.canvas.draw_idle()
 
 
-# =============================================================================
-# 7. PESTAÑA DE INTENSIDAD ABSOLUTA (sin normalizar) vs x'
-# =============================================================================
-
-# Solo las aberturas con plano de observación físico x' (excluye las angulares:
-# rendijas, escalón, redes en cascada).
-ABS_NAMES = [n for n, e in APERTURAS_20.items() if "abs" in e]
-
-
-class TabAbsoluto:
-    """Muestra I_abs(x',0) = |U|² relativa al incidente (centro = (Área/λz)²),
-    con la normalizada debajo para comparar. Selector limitado a ABS_NAMES."""
-
-    def __init__(self, parent):
-        self.parent = parent
-        self._pv = []
-        self._build_controls()
-        self._build_figure()
-        self._on_aperture()
-
-    def _build_controls(self):
-        panel = ttk.Frame(self.parent, padding=8)
-        panel.pack(side="left", fill="y")
-
-        self.titulo_var = tk.StringVar(value="")
-        ttk.Label(panel, textvariable=self.titulo_var,
-                  font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
-
-        sel = ttk.LabelFrame(panel, text="Abertura", padding=6)
-        sel.pack(fill="x", pady=4)
-        self.aper = tk.StringVar(value=ABS_NAMES[0])
-        cb = ttk.Combobox(sel, textvariable=self.aper, state="readonly",
-                          values=ABS_NAMES, width=30)
-        cb.pack(fill="x")
-        cb.bind("<<ComboboxSelected>>", self._on_aperture)
-
-        self.param_frame = ttk.LabelFrame(panel, text="Parámetros", padding=6)
-        self.param_frame.pack(fill="x", pady=4)
-
-        self.status_frame = ttk.LabelFrame(panel, text="Intensidad absoluta",
-                                           padding=6)
-        self.status_frame.pack(fill="x", pady=4)
-        self.status = tk.StringVar(value="")
-        self.status_lbl = ttk.Label(self.status_frame, textvariable=self.status,
-                                    justify="left", font=("Consolas", 9))
-        self.status_lbl.pack(anchor="w")
-
-        ex = ttk.LabelFrame(panel, text="Expresión de I", padding=6)
-        ex.pack(fill="x", pady=4)
-        self.expr = tk.StringVar(value="")
-        ttk.Label(ex, textvariable=self.expr, justify="left",
-                  font=("Consolas", 8)).pack(anchor="w")
-
-    def _build_figure(self):
-        right = ttk.Frame(self.parent)
-        right.pack(side="left", fill="both", expand=True)
-        self.fig = Figure(figsize=(10.5, 8.0))
-        gs = self.fig.add_gridspec(2, 1, hspace=0.32)
-        self.ax_abs = self.fig.add_subplot(gs[0, 0])
-        self.ax_norm = self.fig.add_subplot(gs[1, 0])
-        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        NavigationToolbar2Tk(self.canvas, right).update()
-
-    def _on_aperture(self, *_):
-        entry = APERTURAS_20[self.aper.get()]
-        for w in self.param_frame.winfo_children():
-            w.destroy()
-        self._pv = []
-        for (clave, label, frm, to, init, esc, fmt) in entry["sliders"]:
-            var = crear_slider(self.param_frame, label, frm, to, init,
-                               self.recompute, fmt)
-            self._pv.append((clave, var, esc))
-        self.titulo_var.set(entry["titulo"])
-        self.expr.set(entry.get("expr", ""))
-        self.recompute()
-
-    def recompute(self):
-        entry = APERTURAS_20[self.aper.get()]
-        p = {clave: var.get() * esc for (clave, var, esc) in self._pv}
-        x, I_abs, I_norm = entry["abs"](p)
-        xmm = x * 1e3
-
-        ax = self.ax_abs
-        ax.clear()
-        ax.plot(xmm, I_abs, color="darkorange", lw=1.1)
-        ax.fill_between(xmm, I_abs, alpha=0.20, color="darkorange")
-        ax.set_xlim(xmm[0], xmm[-1])
-        ax.set_ylim(bottom=0.0)
-        ax.set_xlabel("x'  [mm]   (perfil en y'=0)")
-        ax.set_ylabel("I / I_inc  (absoluta)")
-        ax.set_title("Intensidad absoluta  I(x',0) = |U|²  (centro = (Área/λz)²)")
-
-        ax = self.ax_norm
-        ax.clear()
-        ax.plot(xmm, I_norm, color="crimson", lw=1.0)
-        ax.fill_between(xmm, I_norm, alpha=0.15, color="crimson")
-        ax.set_xlim(xmm[0], xmm[-1])
-        ax.set_ylim(bottom=0.0)
-        ax.set_xlabel("x'  [mm]")
-        ax.set_ylabel("I / I₀  (normalizada)")
-        ax.set_title("Misma curva normalizada (comparación)")
-
-        axial = I_abs[np.argmin(np.abs(x))] if x.size else float("nan")
-        self.status.set(
-            f"I_abs(x'=0) = {axial:.4e}\n"
-            f"(= (Área/λz)², relativa a la\n"
-            f" onda incidente amplitud 1)")
-        self.status_lbl.configure(foreground="#333333")
-        self.canvas.draw_idle()
-
-
 def main():
     root = tk.Tk()
     root.title("Código 20 — Difracción de Fraunhofer analítica 2D")
-    nb = ttk.Notebook(root)
-    nb.pack(fill="both", expand=True)
-
-    t1 = ttk.Frame(nb)
-    nb.add(t1, text="Patrón (normalizado)")
-    HostFraunhofer(t1)
-
-    t2 = ttk.Frame(nb)
-    nb.add(t2, text="Intensidad absoluta")
-    TabAbsoluto(t2)
-
+    marco = ttk.Frame(root)
+    marco.pack(fill="both", expand=True)
+    HostFraunhofer(marco)
     root.mainloop()
 
 
