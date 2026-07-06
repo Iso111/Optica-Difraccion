@@ -35,7 +35,7 @@ from matplotlib.backends.backend_tkagg import (
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "Codigo_1"))
 from fraunhofer_analitico import (          # noqa: E402
     fresnel_propagate, mascara_doble_circulo, mascara_dos_semicirculos,
-    regimen_generico, crear_slider, _escala_norm)
+    regimen_generico, crear_slider, _escala_norm, _mascara_fina)
 
 
 # =============================================================================
@@ -458,15 +458,17 @@ class TabEvolucionFresnel:
         # --- Plano de la abertura (máscara rasterizada, misma que evolucion) ---
         ax = self.ax_ap
         ax.clear()
-        ext_ap = d["x_ap"][-1] * 1e3
-        ax.imshow(d["mascara"], extent=[-ext_ap, ext_ap, -ext_ap, ext_ap],
+        # Máscara en malla fina (solo visual), independiente de la resolución de
+        # la FFT/pad que dejaría los bordes escalonados (helper del Código 20).
+        rlim_m = 0.8 * D
+        maskfn = APERTURAS[self.aper.get()]["mask"]
+        md = _mascara_fina(lambda X, Y: maskfn(X, Y, params), rlim_m)
+        rl = rlim_m * 1e3
+        ax.imshow(md, extent=[-rl, rl, -rl, rl],
                   origin="lower", cmap="gray", vmin=0, vmax=1)
         ax.set_xlabel("x̃ [mm]")
         ax.set_ylabel("ỹ [mm]")
         ax.set_title("Plano de la abertura (máscara)")
-        rlim = 0.8 * D * 1e3
-        ax.set_xlim(-rlim, rlim)
-        ax.set_ylim(-rlim, rlim)
 
         # --- Patrón 2D Fresnel (N_F actual), recortado a senθ_max·z ---
         ax = self.ax_2d
@@ -697,15 +699,17 @@ class TabIntensidadAbsoluta:
         # --- Plano de la abertura (máscara) ---
         ax = self.ax_ap
         ax.clear()
-        ext_ap = d["x_ap"][-1] * 1e3
-        ax.imshow(d["mascara"], extent=[-ext_ap, ext_ap, -ext_ap, ext_ap],
+        # Máscara en malla fina (solo visual), independiente de la resolución de
+        # la FFT/pad que dejaría los bordes escalonados (helper del Código 20).
+        rlim_m = 0.8 * D
+        maskfn = APERTURAS[self.aper.get()]["mask"]
+        md = _mascara_fina(lambda X, Y: maskfn(X, Y, params), rlim_m)
+        rl = rlim_m * 1e3
+        ax.imshow(md, extent=[-rl, rl, -rl, rl],
                   origin="lower", cmap="gray", vmin=0, vmax=1)
         ax.set_xlabel("x̃ [mm]")
         ax.set_ylabel("ỹ [mm]")
         ax.set_title("Plano de la abertura (máscara)")
-        rlim = 0.8 * D * 1e3
-        ax.set_xlim(-rlim, rlim)
-        ax.set_ylim(-rlim, rlim)
 
         # --- Perfil ABSOLUTO |U|² vs x' (sin normalizar) ---
         ax = self.ax_abs

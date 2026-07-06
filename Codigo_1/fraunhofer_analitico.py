@@ -626,6 +626,17 @@ def _escala_norm(I, modo):
     return I, None  # lineal
 
 
+def _mascara_fina(mask_xy, rlim, npix=500):
+    """Rasteriza una máscara booleana en malla fina (npix²) sobre la ventana
+    ±rlim [m], SOLO para mostrarla limpia — independiente de la resolución de la
+    FFT (que usa zero-padding/pad y dejaría los bordes escalonados). Recibe una
+    función `mask_xy(X, Y) -> bool`. Es puramente visual (no toca la física).
+    Reutilizada por los Códigos 21 y 22."""
+    x = np.linspace(-rlim, rlim, npix)
+    X, Y = np.meshgrid(x, x)
+    return mask_xy(X, Y).astype(float)
+
+
 def _status_regimen(D_char, z_min, N_F, es_fh, z, metodo="sinc²"):
     """Texto y color de la caja de régimen (verde=Fraunhofer, rojo=Fresnel).
     Devuelve (txt, color) — el host los escribe en el widget de status."""
@@ -843,21 +854,20 @@ def render_dos_semicirculos(fig, p, modo):
 
     area = area_dos_semicirculos(r1, r2)
     I0_axial = irradiancia_axial_relativa(area, lam, z)
-    x_obs, I2D, mascara, x_ap = patron_fft_semicirculos(r1, r2, lam, z, xmax, N)
+    x_obs, I2D, _, _ = patron_fft_semicirculos(r1, r2, lam, z, xmax, N)
 
     j0 = np.argmin(np.abs(x_obs))
     I_fft_centro = I2D[j0, j0] if I2D.size else float("nan")
 
-    ext_ap = x_ap[-1] * 1e3
-    ax_ap.imshow(mascara, extent=[-ext_ap, ext_ap, -ext_ap, ext_ap],
+    rlim_m = 3.5 * max(r1, r2)
+    md = _mascara_fina(lambda X, Y: mascara_dos_semicirculos(X, Y, r1, r2), rlim_m)
+    rl = rlim_m * 1e3
+    ax_ap.imshow(md, extent=[-rl, rl, -rl, rl],
                  origin="lower", cmap="gray", vmin=0, vmax=1)
     ax_ap.axhline(0.0, color="orange", lw=0.6, ls=":")
     ax_ap.set_xlabel("x̃  [mm]")
     ax_ap.set_ylabel("ỹ  [mm]")
-    ax_ap.set_title("Máscara de la abertura (rasterizada)")
-    rlim = 3.5 * max(r1, r2) * 1e3
-    ax_ap.set_xlim(-rlim, rlim)
-    ax_ap.set_ylim(-rlim, rlim)
+    ax_ap.set_title("Máscara de la abertura")
 
     ext = x_obs[-1] * 1e3 if x_obs.size else xmax * 1e3
     datos, norm = _escala_norm(I2D, modo)
@@ -1079,15 +1089,14 @@ def render_doble_circulo(fig, p, modo):
     ax_fr = fig.add_subplot(gs[1, 0])
     ax_prof = fig.add_subplot(gs[1, 1])
 
-    ext_ap = d["x_ap"][-1] * 1e3
-    ax_ap.imshow(d["mascara"], extent=[-ext_ap, ext_ap, -ext_ap, ext_ap],
+    rlim_m = 1.6 * max(r1, r2)
+    md = _mascara_fina(lambda X, Y: mascara_doble_circulo(X, Y, r1, r2), rlim_m)
+    rl = rlim_m * 1e3
+    ax_ap.imshow(md, extent=[-rl, rl, -rl, rl],
                  origin="lower", cmap="gray", vmin=0, vmax=1)
     ax_ap.set_title("Abertura (3 cuad. r₁ + ¼ r₂)")
     ax_ap.set_xlabel("x̃ [mm]")
     ax_ap.set_ylabel("ỹ [mm]")
-    rlim = 1.6 * max(r1, r2) * 1e3
-    ax_ap.set_xlim(-rlim, rlim)
-    ax_ap.set_ylim(-rlim, rlim)
 
     ext = xmax * 1e3
     datos, norm = _escala_norm(I_fh, modo)
