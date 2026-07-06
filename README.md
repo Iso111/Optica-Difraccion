@@ -62,11 +62,24 @@ Tres programas interactivos para simular **patrones de difracción óptica** en 
 - **Método:** `numpy.fft.fft2` + `fftshift` con mapeo correcto de coordenadas (`dx' = λz/Lx`)
 - **Casos:** Rectángulo (valida contra Código 20) y círculo (Disco de Airy → Bessel J₁)
 
-### Código 22: Difracción de Fresnel (Campo Cercano)
-- **Ubicación:** `Codigo_3/`
-- **Objetivo:** Calcular difracción Fresnel usando integrales de Fresnel (espiral de Cornu)
-- **Método:** `scipy.special.fresnel` vectorizado con `meshgrid`
-- **Resultado clave:** Evolución del patrón en función del número de Fresnel, transición hacia Fraunhofer
+### Código 22: Evolución del patrón de Fresnel → Fraunhofer ✅
+- **Ubicación:** `Codigo_3/fresnel.py` — ejecutar `python Codigo_3/fresnel.py`
+- **Objetivo (pto 22):** graficar la **evolución del patrón de Fresnel en función del número de
+  Fresnel** `N_F = D²/(λz)`, evidenciando en **una misma gráfica** su convergencia al patrón de
+  **Fraunhofer** (campo lejano).
+- **Reutiliza el Código 20:** importa el motor `fresnel_propagate` (FFT único) y las máscaras
+  circulares ya validadas (`sys.path` a `Codigo_1/`); no duplica el motor (CLAUDE.md). Las máscaras
+  rectangulares/rendijas se rasterizan aquí.
+- **Eje angular común `senθ = x'/z = n·λ/(N·dx)`** (independiente de z): la Fraunhofer límite (`|𝓕|²`
+  sin chirp de salida) queda FIJA y las curvas de Fresnel a distintos `N_F` convergen a ella.
+- **GUI:** una pestaña con **selector** de las 6 aberturas del taller (marco+círculo, cruz, dos
+  semicírculos, doble cuadrado, N rendijas, doble círculo). Slider de `N_F` que mueve la curva actual
+  sobre un fondo de curvas fijas (Fresnel a varios `N_F` + Fraunhofer + la curva umbral `z=z_min`,
+  `N_F=0.5`, en **rayado**); panel de patrón 2D de Fresnel; auto-ajuste del rango angular con zoom.
+- **Validado headless:** convergencia Fresnel→Fraunhofer (corr → 1.0000 a `N_F=0.1` en doble círculo,
+  cruz y rendijas; difieren a `N_F` alto — rendijas hasta 0.25 por estructura tipo Talbot); motor FFT
+  vs **espiral de Cornu** (`scipy.special.fresnel`) en rendija simple (corr 0.9999, dif <1.2%); axial
+  del pto 19 recuperado (2.25·I).
 
 ## Requisitos
 
