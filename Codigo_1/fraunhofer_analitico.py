@@ -603,6 +603,10 @@ def crear_slider(parent, label, frm, to, init, on_change, fmt="{:.2f}"):
     scale.pack(side="left", fill="x", expand=True, padx=4)
     scale.bind("<ButtonRelease-1>", lambda _=None: on_change())
 
+    # ttk.Scale no dispara `command` cuando la variable se fija por código
+    # (var.set); el trace mantiene el Entry sincronizado también en ese caso.
+    var.trace_add("write", lambda *_: on_move())
+
     return var
 
 

@@ -150,11 +150,27 @@ APERTURAS = {
 # 3. NÚCLEO: perfiles Fresnel/Fraunhofer sobre el eje angular común
 # =============================================================================
 
-# pad usado por `evolucion` (ventana L = pad·D). Determina el criterio de
-# muestreo del FFT-Fresnel (N > pad²·N_F). pad=4 (en vez de 6) reduce a la
-# mitad el N requerido para campo cercano profundo → permite alcanzar w≈12
-# (N_F≈72) con N=2048 de forma interactiva, y muestrea mejor la abertura.
-PAD_EVOL = 4.0
+# Ventana del FFT-Fresnel: L = pad·D. El `pad` fija a la vez (a) el muestreo del
+# chirp de Fresnel — Nyquist exige N ≥ pad²·N_F — y (b) la resolución ANGULAR
+# de salida δ(senθ) = λ/(pad·D), es decir ~pad puntos por lóbulo del patrón.
+# Un pad pequeño (4) alcanza campo cercano profundo pero da curvas quebradas
+# (pocos puntos/lóbulo); uno grande da curvas suaves pero, a N fijo, aliasea.
+# Por eso se elige ADAPTATIVO: el mayor pad que aún cumpla Nyquist con margen
+# para el N y N_F actuales, acotado a [PAD_MIN, PAD_MAX]. Como el N (tamaño de
+# la FFT) no cambia, subir el pad es GRATIS en cómputo: solo reparte los mismos
+# puntos en una malla más fina de ángulo.
+PAD_MIN = 4.0      # piso: <4 pts/lóbulo se ve quebrado (y suele implicar alias)
+PAD_MAX = 16.0     # techo: más no mejora a la vista y encoge el rango angular
+PAD_MARG = 1.3     # margen de seguridad sobre el límite de Nyquist
+
+
+def _pad_muestreo(N, NF):
+    """Devuelve (pad, ok): el mayor pad ≤ PAD_MAX que cumpla N ≥ PAD_MARG·pad²·N_F
+    ⇔ pad ≤ √(N/(PAD_MARG·N_F)), acotado por abajo a PAD_MIN. `ok` es False si
+    hubo que FORZAR el piso PAD_MIN (entonces Nyquist se viola → submuestreo)."""
+    pad_ideal = np.sqrt(N / (PAD_MARG * max(NF, 1e-9)))
+    pad = float(min(PAD_MAX, max(PAD_MIN, pad_ideal)))
+    return pad, bool(pad_ideal >= PAD_MIN)
 
 
 def _campo(mask, dx, lam, z, quiere_2d=False):
@@ -174,26 +190,29 @@ def _campo(mask, dx, lam, z, quiere_2d=False):
     return out
 
 
-def evolucion(aper, params, lam, NF_actual, NF_fijos, N=512, pad=PAD_EVOL):
+def evolucion(aper, params, lam, NF_actual, NF_fijos, N=512):
     """
     Para la abertura `aper` (nombre en APERTURAS) con `params` en SI, calcula:
       · el fondo de curvas Fresnel a los N_F de `NF_fijos`,
       · la Fraunhofer límite,
       · la curva Fresnel a `NF_actual` (con su patrón 2D),
     todas sobre el mismo eje angular. Devuelve un dict con todo lo dibujable.
+    Cada curva elige su `pad` (ventana/resolución angular) de forma adaptativa
+    con `_pad_muestreo` según su N_F, para muestrear fino sin aliasear.
     """
     spec = APERTURAS[aper]
     D = spec["Dchar"](params)
 
     def curva(NF, Ncur, dos_d=False):
         """Campo Fresnel/Fraunhofer a resolución Ncur (malla propia)."""
+        pad, ok = _pad_muestreo(Ncur, NF)
         L = pad * D
         x = (np.arange(Ncur) - Ncur // 2) * (L / Ncur)
         dx = L / Ncur
         X, Y = np.meshgrid(x, x)
         mask = spec["mask"](X, Y, params).astype(complex)
         z = D ** 2 / (lam * NF)
-        return _campo(mask, dx, lam, z, quiere_2d=dos_d), z, x, mask
+        return _campo(mask, dx, lam, z, quiere_2d=dos_d), z, x, mask, pad, ok
 
     # Fondo: curvas de referencia (N_F bajos) — no requieren alta resolución,
     # así que se calculan a N acotado para no encarecer el recálculo cuando el
@@ -202,13 +221,14 @@ def evolucion(aper, params, lam, NF_actual, NF_fijos, N=512, pad=PAD_EVOL):
     N_fondo = min(N, 640)
     fondo = []
     for NF in NF_fijos:
-        c, z, _, _ = curva(NF, N_fondo)
+        c, z, _, _, _, _ = curva(NF, N_fondo)
         fondo.append((NF, z, c["sen"], c["I_fr"]))
-    cur, z_cur, x_cur, mask_cur = curva(NF_actual, N, dos_d=True)
+    cur, z_cur, x_cur, mask_cur, pad_cur, ok_cur = curva(NF_actual, N, dos_d=True)
     return {"D": D, "fondo": fondo, "sen": cur["sen"],
             "I_fr": cur["I_fr"], "I_fh": cur["I_fh"], "I_fr2d": cur["I_fr2d"],
             "z_cur": z_cur, "dx2": cur["dx2"],
-            "mascara": mask_cur.real, "x_ap": x_cur}
+            "mascara": mask_cur.real, "x_ap": x_cur,
+            "pad": pad_cur, "muestreo_ok": ok_cur}
 
 
 # =============================================================================
@@ -219,17 +239,53 @@ def evolucion(aper, params, lam, NF_actual, NF_fijos, N=512, pad=PAD_EVOL):
 NF_FONDO = [4.0, 2.0, 1.0, 0.5, 0.15]
 
 
-def aviso_muestreo(D, lam, z, N, pad=PAD_EVOL):
-    """El FFT-Fresnel (chirp de entrada) exige z > z_c = N·dx²/λ con
-    dx = pad·D/N  ⇔  N > pad²·N_F. Si no se cumple, el patrón de campo cercano
-    queda SUBMUESTREADO (aliasing). Devuelve (texto_aviso, es_valido).
-    Nota: el tamaño D se cancela en z/z_c = N/(pad²·N_F) — solo importan N y N_F."""
-    dx = pad * D / N
-    z_c = N * dx ** 2 / lam
-    if z >= z_c:
-        return "", True
-    return (f"⚠ SUBMUESTREO: z={z*1e3:.2f} < z_c={z_c*1e3:.2f} mm\n"
-            f"  sube N (px) o baja N_F", False)
+def crear_slider_log(parent, label, z_min, z_max, z_init, on_change, fmt="{:.4g}"):
+    """Slider de distancia z en escala LOGARÍTMICA (z abarca varios órdenes de
+    magnitud según N_F y D_char, de ~0.01 mm a ~10^3 km). La DoubleVar interna
+    guarda log10(z[m]); usar 10**var.get() para recuperar z en metros. Mismo
+    patrón que `crear_slider` (Entry editable, commit en Enter/FocusOut,
+    recompute en ButtonRelease-1)."""
+    row = ttk.Frame(parent)
+    row.pack(fill="x", pady=1)
+    ttk.Label(row, text=label, width=15).pack(side="left")
+
+    var = tk.DoubleVar(value=np.log10(z_init))
+    entry_var = tk.StringVar(value=fmt.format(z_init))
+    entry = ttk.Entry(row, textvariable=entry_var, width=8, justify="right")
+    entry.pack(side="right")
+
+    def on_move(_=None):
+        entry_var.set(fmt.format(10 ** var.get()))
+
+    def commit(_=None):
+        try:
+            v = float(entry_var.get().replace(",", "."))
+        except ValueError:
+            entry_var.set(fmt.format(10 ** var.get()))
+            return
+        v = max(z_min, min(z_max, v))
+        var.set(np.log10(v))
+        entry_var.set(fmt.format(v))
+        on_change()
+
+    entry.bind("<Return>", commit)
+    entry.bind("<FocusOut>", commit)
+
+    scale = ttk.Scale(row, from_=np.log10(z_min), to=np.log10(z_max),
+                      variable=var, orient="horizontal", command=on_move)
+    scale.pack(side="left", fill="x", expand=True, padx=4)
+    scale.bind("<ButtonRelease-1>", lambda _=None: on_change())
+
+    # ttk.Scale NO llama a `command` cuando la variable se fija por código
+    # (var.set(...)); el trace sí, así el Entry refleja los sync z↔N_F.
+    var.trace_add("write", lambda *_: on_move())
+
+    return var
+
+
+# Límites del slider de z (m): cubren desde aberturas de 0.05mm a N_F=80
+# hasta aberturas de 76mm a N_F=0.05.
+Z_MIN, Z_MAX = 1e-5, 1e6
 
 
 class TabEvolucionFresnel:
@@ -238,6 +294,7 @@ class TabEvolucionFresnel:
     def __init__(self, parent):
         self.parent = parent
         self.param_vars = []
+        self._z_locked = False       # True tras mover el slider z manualmente
         self._build_controls()
         self._build_figure()
         self._on_aperture()          # construye sliders + primer cálculo
@@ -260,16 +317,20 @@ class TabEvolucionFresnel:
         self.param_frame = ttk.LabelFrame(panel, text="Parámetros", padding=6)
         self.param_frame.pack(fill="x", pady=4)
 
-        f2 = ttk.LabelFrame(panel, text="Número de Fresnel (evolución)", padding=6)
+        f2 = ttk.LabelFrame(panel, text="Número de Fresnel / distancia z", padding=6)
         f2.pack(fill="x", pady=4)
         self.NF = crear_slider(f2, "N_F actual", 0.05, 80.0, 2.0,
-                               self.recompute, "{:.2f}")
+                               self._on_NF_change, "{:.2f}")
+        self.z = crear_slider_log(f2, "z (m)", Z_MIN, Z_MAX, 1.0,
+                                  self._on_z_change, "{:.4g}")
 
         f3 = ttk.LabelFrame(panel, text="Fuente / cálculo", padding=6)
         f3.pack(fill="x", pady=4)
         self.lam = crear_slider(f3, "λ (nm)", 380.0, 1000.0, 500.0,
-                                self.recompute, "{:.0f}")
-        self.zoom = crear_slider(f3, "zoom (×auto)", 0.3, 3.0, 1.0,
+                                self._on_param_change, "{:.0f}")
+        # zoom<1 aleja (ve más lejos del centro); mínimo 0.05 → hasta ~26×auto,
+        # acotado luego al rango angular realmente calculado por la FFT.
+        self.zoom = crear_slider(f3, "zoom (×auto)", 0.05, 3.0, 1.0,
                                  self.recompute, "{:.2f}")
         self.N = crear_slider(f3, "N (px, FFT)", 256.0, 2048.0, 512.0,
                               self.recompute, "{:.0f}")
@@ -315,10 +376,61 @@ class TabEvolucionFresnel:
         self.param_scales = []
         for (label, frm, to, init, escala, fmt) in APERTURAS[self.aper.get()]["sliders"]:
             var = crear_slider(self.param_frame, label, frm, to, init,
-                               self.recompute, fmt)
+                               self._on_param_change, fmt)
             self.param_vars.append(var)
             self.param_scales.append(escala)
         self.expr.set(APERTURAS[self.aper.get()].get("expr", ""))
+        self._on_param_change()
+
+    def _D_actual(self):
+        """D_char con los parámetros actuales de la abertura, o None si aún
+        no se han construido los sliders (primera llamada de __init__)."""
+        if not self.param_vars:
+            return None
+        params = [v.get() * e for v, e in zip(self.param_vars, self.param_scales)]
+        return APERTURAS[self.aper.get()]["Dchar"](params)
+
+    def _sync_z_from_NF(self):
+        """z = D²/(λN_F): actualiza el slider z para reflejar el N_F actual
+        (no dispara recompute — solo redibuja la posición/Entry del slider)."""
+        D = self._D_actual()
+        if D is None:
+            return
+        lam = self.lam.get() * 1e-9
+        z = D ** 2 / (lam * self.NF.get())
+        self.z.set(np.log10(min(max(z, Z_MIN), Z_MAX)))
+
+    def _sync_NF_from_z(self):
+        """N_F = D²/(λz): actualiza el slider N_F para reflejar la z actual."""
+        D = self._D_actual()
+        if D is None:
+            return
+        lam = self.lam.get() * 1e-9
+        z = 10 ** self.z.get()
+        NF = D ** 2 / (lam * z)
+        self.NF.set(min(max(NF, 0.05), 80.0))
+
+    def _on_NF_change(self):
+        """El usuario movió N_F directamente: z queda LIBRE (se recalcula)."""
+        self._z_locked = False
+        self._sync_z_from_NF()
+        self.recompute()
+
+    def _on_z_change(self):
+        """El usuario movió z directamente: se fija como distancia de
+        referencia y N_F se recalcula para que la evolución la respete."""
+        self._z_locked = True
+        self._sync_NF_from_z()
+        self.recompute()
+
+    def _on_param_change(self):
+        """Cambió la abertura, un parámetro o λ (D_char o λ cambian). Si el
+        usuario ya fijó una z manualmente, se mantiene esa z y se recalcula
+        N_F; si no, se preserva N_F y solo se actualiza la z mostrada."""
+        if self._z_locked:
+            self._sync_NF_from_z()
+        else:
+            self._sync_z_from_NF()
         self.recompute()
 
     def recompute(self):
@@ -336,10 +448,12 @@ class TabEvolucionFresnel:
 
         # Auto-ajuste del rango angular: hasta donde la Fraunhofer (límite) es
         # significativa (>1% del pico), con margen y el zoom manual encima.
+        # Se acota al rango angular REALMENTE calculado por la FFT (evita mostrar
+        # regiones planas fuera de los datos al alejar mucho con zoom<1).
         Ifh_n = d["I_fh"] / d["I_fh"].max() if d["I_fh"].max() > 0 else d["I_fh"]
         sig = np.abs(d["sen"])[Ifh_n > 0.01]
         base = sig.max() if sig.size else np.abs(d["sen"]).max()
-        senmax = 1.3 * base / zoom
+        senmax = min(1.3 * base / zoom, np.abs(d["sen"]).max())
 
         # --- Plano de la abertura (máscara rasterizada, misma que evolucion) ---
         ax = self.ax_ap
@@ -405,18 +519,19 @@ class TabEvolucionFresnel:
         # --- Régimen ---
         z = d["z_cur"]
         _, N_F, es_fh = regimen_generico(D, lam, z)
-        aviso, muestreo_ok = aviso_muestreo(D, lam, z, Npx)
+        muestreo_ok = d["muestreo_ok"]
         txt = (
             f"D_char = {D*1e3:7.3f} mm\n"
             f"N_F actual = {NF_cur:6.2f}\n"
             f"z = {z:8.3f} m\n"
             f"z_min = {z_min:8.3f} m  (N_F=0.5)\n"
             f"z / z_min = {z/z_min:6.3f}\n"
+            f"muestreo: {d['pad']:.1f} pts/lóbulo\n"
             f"─────────────────────────\n"
             f"{'FRAUNHOFER (campo lejano)' if es_fh else 'FRESNEL (campo cercano)'}"
         )
-        if aviso:
-            txt += "\n" + aviso
+        if not muestreo_ok:
+            txt += "\n⚠ SUBMUESTREO: sube N (px) o baja N_F"
         self.status.set(txt)
         color = "#c00000" if not muestreo_ok else ("#127a12" if es_fh else "#c00000")
         self.status_lbl.configure(foreground=color)
@@ -434,6 +549,7 @@ class TabIntensidadAbsoluta:
         self.parent = parent
         self.param_vars = []
         self.param_scales = []
+        self._z_locked = False       # True tras mover el slider z manualmente
         self._build_controls()
         self._build_figure()
         self._on_aperture()
@@ -455,16 +571,20 @@ class TabIntensidadAbsoluta:
         self.param_frame = ttk.LabelFrame(panel, text="Parámetros", padding=6)
         self.param_frame.pack(fill="x", pady=4)
 
-        f2 = ttk.LabelFrame(panel, text="Número de Fresnel", padding=6)
+        f2 = ttk.LabelFrame(panel, text="Número de Fresnel / distancia z", padding=6)
         f2.pack(fill="x", pady=4)
         self.NF = crear_slider(f2, "N_F actual", 0.05, 80.0, 2.0,
-                               self.recompute, "{:.2f}")
+                               self._on_NF_change, "{:.2f}")
+        self.z = crear_slider_log(f2, "z (m)", Z_MIN, Z_MAX, 1.0,
+                                  self._on_z_change, "{:.4g}")
 
         f3 = ttk.LabelFrame(panel, text="Fuente / cálculo", padding=6)
         f3.pack(fill="x", pady=4)
         self.lam = crear_slider(f3, "λ (nm)", 380.0, 1000.0, 500.0,
-                                self.recompute, "{:.0f}")
-        self.zoom = crear_slider(f3, "zoom (×auto)", 0.3, 3.0, 1.0,
+                                self._on_param_change, "{:.0f}")
+        # zoom<1 aleja (ve más lejos del centro); mínimo 0.05 → hasta ~26×auto,
+        # acotado luego al rango angular realmente calculado por la FFT.
+        self.zoom = crear_slider(f3, "zoom (×auto)", 0.05, 3.0, 1.0,
                                  self.recompute, "{:.2f}")
         self.N = crear_slider(f3, "N (px, FFT)", 256.0, 2048.0, 512.0,
                               self.recompute, "{:.0f}")
@@ -500,10 +620,50 @@ class TabIntensidadAbsoluta:
         self.param_scales = []
         for (label, frm, to, init, escala, fmt) in APERTURAS[self.aper.get()]["sliders"]:
             var = crear_slider(self.param_frame, label, frm, to, init,
-                               self.recompute, fmt)
+                               self._on_param_change, fmt)
             self.param_vars.append(var)
             self.param_scales.append(escala)
         self.expr.set(APERTURAS[self.aper.get()].get("expr", ""))
+        self._on_param_change()
+
+    def _D_actual(self):
+        if not self.param_vars:
+            return None
+        params = [v.get() * e for v, e in zip(self.param_vars, self.param_scales)]
+        return APERTURAS[self.aper.get()]["Dchar"](params)
+
+    def _sync_z_from_NF(self):
+        D = self._D_actual()
+        if D is None:
+            return
+        lam = self.lam.get() * 1e-9
+        z = D ** 2 / (lam * self.NF.get())
+        self.z.set(np.log10(min(max(z, Z_MIN), Z_MAX)))
+
+    def _sync_NF_from_z(self):
+        D = self._D_actual()
+        if D is None:
+            return
+        lam = self.lam.get() * 1e-9
+        z = 10 ** self.z.get()
+        NF = D ** 2 / (lam * z)
+        self.NF.set(min(max(NF, 0.05), 80.0))
+
+    def _on_NF_change(self):
+        self._z_locked = False
+        self._sync_z_from_NF()
+        self.recompute()
+
+    def _on_z_change(self):
+        self._z_locked = True
+        self._sync_NF_from_z()
+        self.recompute()
+
+    def _on_param_change(self):
+        if self._z_locked:
+            self._sync_NF_from_z()
+        else:
+            self._sync_z_from_NF()
         self.recompute()
 
     def recompute(self):
@@ -519,12 +679,13 @@ class TabIntensidadAbsoluta:
         D = d["D"]
         z = d["z_cur"]
 
-        # Rango angular: hasta donde la Fraunhofer límite es significativa.
+        # Rango angular: hasta donde la Fraunhofer límite es significativa,
+        # acotado al rango realmente calculado por la FFT (zoom<1 aleja).
         Ifh = d["I_fh"]
         Ifh_n = Ifh / Ifh.max() if Ifh.max() > 0 else Ifh
         sig = np.abs(d["sen"])[Ifh_n > 0.01]
         base = sig.max() if sig.size else np.abs(d["sen"]).max()
-        senmax = 1.3 * base / zoom
+        senmax = min(1.3 * base / zoom, np.abs(d["sen"]).max())
 
         # --- Plano de la abertura (máscara) ---
         ax = self.ax_ap
@@ -560,19 +721,20 @@ class TabIntensidadAbsoluta:
         z_min = 2.0 * D ** 2 / lam
         i_fr0 = d["I_fr"][np.argmin(np.abs(d["sen"]))]
         i_fh0 = Ifh[np.argmin(np.abs(d["sen"]))]
-        aviso, muestreo_ok = aviso_muestreo(D, lam, z, Npx)
+        muestreo_ok = d["muestreo_ok"]
         txt = (
             f"D_char = {D*1e3:7.3f} mm\n"
             f"N_F actual = {NF_cur:6.2f}   z = {z:.3f} m\n"
             f"z_min = {z_min:8.3f} m  (N_F=0.5)\n"
+            f"muestreo: {d['pad']:.1f} pts/lóbulo\n"
             f"─────────────────────────\n"
             f"I_abs(0) Fresnel    = {i_fr0:7.3f}\n"
             f"I_abs(0) Fraunhofer = {i_fh0:7.3f}\n"
             f"─────────────────────────\n"
             f"{'FRAUNHOFER (campo lejano)' if es_fh else 'FRESNEL (campo cercano)'}"
         )
-        if aviso:
-            txt += "\n" + aviso
+        if not muestreo_ok:
+            txt += "\n⚠ SUBMUESTREO: sube N (px) o baja N_F"
         self.status.set(txt)
         color = "#c00000" if not muestreo_ok else ("#127a12" if es_fh else "#c00000")
         self.status_lbl.configure(foreground=color)
