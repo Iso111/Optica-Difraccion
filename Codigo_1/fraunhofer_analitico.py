@@ -606,1298 +606,33 @@ def crear_slider(parent, label, frm, to, init, on_change, fmt="{:.2f}"):
     return var
 
 
-class FraunhoferGUI:
-
-    def __init__(self, parent):
-        self.parent = parent
-
-        self._build_controls()
-        self._build_figure()
-        self.recompute()
-
-    # ------------------------------------------------------------------ UI
-    def _slider(self, parent, label, frm, to, init, fmt="{:.2f}"):
-        var = crear_slider(parent, label, frm, to, init, self.recompute, fmt)
-        self._sliders.append(var)
-        return var
-
-    def _build_controls(self):
-        self._sliders = []
-        panel = ttk.Frame(self.parent, padding=8)
-        panel.pack(side="left", fill="y")
-
-        ttk.Label(panel, text="Difracción de Fraunhofer",
-                  font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
-
-        # Geometría de la abertura (µm)
-        f1 = ttk.LabelFrame(panel, text="Abertura — marco (µm)", padding=6)
-        f1.pack(fill="x", pady=4)
-        self.a = self._slider(f1, "a  ext. ancho", 0.0, 400.0, 120.0, "{:.1f}")
-        self.b = self._slider(f1, "b  ext. alto",  0.0, 400.0, 160.0, "{:.1f}")
-        self.c = self._slider(f1, "c  int. ancho", 0.0, 400.0, 60.0, "{:.1f}")
-        self.d = self._slider(f1, "d  int. alto",  0.0, 400.0, 90.0, "{:.1f}")
-
-        f2 = ttk.LabelFrame(panel, text="Abertura — círculo y separación (µm)",
-                            padding=6)
-        f2.pack(fill="x", pady=4)
-        self.R = self._slider(f2, "R  radio",      0.0, 300.0, 80.0, "{:.1f}")
-        self.D = self._slider(f2, "D  separación", 0.0, 1500.0, 400.0, "{:.1f}")
-
-        # Fuente
-        f3 = ttk.LabelFrame(panel, text="Fuente", padding=6)
-        f3.pack(fill="x", pady=4)
-        self.lam = self._slider(f3, "λ (nm)", 380.0, 1000.0, 633.0, "{:.0f}")
-
-        # Plano de observación
-        f4 = ttk.LabelFrame(panel, text="Plano de observación", padding=6)
-        f4.pack(fill="x", pady=4)
-        self.z = self._slider(f4, "z (m)", 0.05, 20.0, 5.0, "{:.2f}")
-        self.xmax = self._slider(f4, "x'_max (mm)", 1.0, 80.0, 25.0, "{:.1f}")
-        self.N = self._slider(f4, "N (px)", 200.0, float(NX_MAX), 500.0, "{:.0f}")
-
-        # Visualización
-        f5 = ttk.LabelFrame(panel, text="Escala de intensidad", padding=6)
-        f5.pack(fill="x", pady=4)
-        self.escala = tk.StringVar(value="gamma")
-        for txt, val in (("Lineal", "lineal"), ("γ (0.4)", "gamma"),
-                         ("Log", "log")):
-            ttk.Radiobutton(f5, text=txt, variable=self.escala, value=val,
-                            command=self.recompute).pack(side="left")
-
-        # Estado / régimen
-        st = ttk.LabelFrame(panel, text="Régimen del cálculo", padding=6)
-        st.pack(fill="x", pady=4)
-        self.status = tk.StringVar(value="")
-        self.status_lbl = ttk.Label(st, textvariable=self.status, justify="left",
-                                    font=("Consolas", 9))
-        self.status_lbl.pack(anchor="w")
-
-    def _build_figure(self):
-        right = ttk.Frame(self.parent)
-        right.pack(side="left", fill="both", expand=True)
-
-        self.fig = Figure(figsize=(10.5, 8.0))
-        gs = self.fig.add_gridspec(2, 2, hspace=0.30, wspace=0.28,
-                                   height_ratios=[1.5, 1])
-        self.ax_ap = self.fig.add_subplot(gs[0, 0])   # abertura a escala
-        self.ax_pat = self.fig.add_subplot(gs[0, 1])  # patrón 2D
-        self.ax_prof = self.fig.add_subplot(gs[1, :])  # perfil I(x',0)
-
-        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        NavigationToolbar2Tk(self.canvas, right).update()
-
-    # -------------------------------------------------------------- lectura
-    def _leer(self):
-        """Lee los sliders y convierte a unidades SI (µm→m, nm→m, mm→m)."""
-        return dict(
-            a=self.a.get() * 1e-6,
-            b=self.b.get() * 1e-6,
-            c=self.c.get() * 1e-6,
-            d=self.d.get() * 1e-6,
-            R=self.R.get() * 1e-6,
-            D=self.D.get() * 1e-6,
-            lam=self.lam.get() * 1e-9,
-            z=self.z.get(),
-            xmax=self.xmax.get() * 1e-3,
-            N=int(self.N.get()),
-        )
-
-    # ----------------------------------------------------------- recálculo
-    def recompute(self):
-        p = self._leer()
-
-        # Malla del plano de observación (X, Y) en metros.
-        x = np.linspace(-p["xmax"], p["xmax"], p["N"])
-        X, Y = np.meshgrid(x, x)
-        I = intensidad(X, Y, p)
-
-        self._draw_aperture(p)
-        self._draw_pattern(I, p)
-        self._draw_profile(x, I, p)
-        self._update_status(p)
-
-        self.canvas.draw_idle()
-
-    def _draw_aperture(self, p):
-        """Dibuja la abertura a escala (µm): marco (con hueco) + círculo."""
-        ax = self.ax_ap
-        ax.clear()
-        um = 1e6  # m → µm para el dibujo
-
-        a, b, c, d = p["a"] * um, p["b"] * um, p["c"] * um, p["d"] * um
-        R, D = p["R"] * um, p["D"] * um
-        # Centros: marco en -D/2, círculo en +D/2.
-        xm, xc = -D / 2.0, +D / 2.0
-
-        ax.set_facecolor("#111111")
-        # Marco: rectángulo exterior claro + interior en color del fondo (hueco).
-        if a > 0 and b > 0:
-            ax.add_patch(Rectangle((xm - a / 2, -b / 2), a, b,
-                                   facecolor="white", edgecolor="none"))
-        if c > 0 and d > 0:
-            ax.add_patch(Rectangle((xm - c / 2, -d / 2), c, d,
-                                   facecolor="#111111", edgecolor="none"))
-        if R > 0:
-            ax.add_patch(Circle((xc, 0.0), R, facecolor="white", edgecolor="none"))
-
-        # Cota de separación D.
-        if D > 0:
-            ytop = max(b, 2 * R) / 2 * 1.15 + 5
-            ax.annotate("", xy=(xc, ytop), xytext=(xm, ytop),
-                        arrowprops=dict(arrowstyle="<->", color="orange"))
-            ax.text(0.0, ytop + 4, "D", color="orange", ha="center",
-                    va="bottom", fontsize=11)
-
-        semi = max(a, c, 2 * R) / 2 + D / 2 + 10
-        semiy = max(b, 2 * R) / 2 * 1.15 + 20
-        ax.set_xlim(-semi, semi)
-        ax.set_ylim(-semiy, semiy)
-        ax.set_aspect("equal")
-        ax.set_xlabel("x̃  [µm]")
-        ax.set_ylabel("ỹ  [µm]")
-        ax.set_title("Plano de la abertura (a escala)")
-
-    def _escala_norm(self, I):
-        """Devuelve (datos, norm) según la escala de visualización elegida."""
-        modo = self.escala.get()
-        if modo == "log":
-            piso = I.max() * 1e-5 if I.max() > 0 else 1e-9
-            return I + piso, LogNorm(vmin=piso, vmax=max(I.max(), piso * 10))
-        if modo == "gamma":
-            return I, PowerNorm(gamma=0.4, vmin=0.0, vmax=max(I.max(), 1e-12))
-        return I, None  # lineal
-
-    def _draw_pattern(self, I, p):
-        ax = self.ax_pat
-        ax.clear()
-        ext = p["xmax"] * 1e3  # m → mm
-        datos, norm = self._escala_norm(I)
-        ax.imshow(datos, extent=[-ext, ext, -ext, ext], origin="lower",
-                  cmap="inferno", norm=norm,
-                  vmax=(None if norm is not None else max(I.max(), 1e-12)))
-        ax.set_xlabel("x'  [mm]")
-        ax.set_ylabel("y'  [mm]")
-        ax.set_title("Fraunhofer analítico — sinc² (marco) + Airy (círculo)")
-
-    def _draw_profile(self, x, I, p):
-        ax = self.ax_prof
-        ax.clear()
-        j = I.shape[0] // 2  # fila central y'=0
-        ax.plot(x * 1e3, I[j, :], color="crimson", lw=1.0)
-        ax.fill_between(x * 1e3, I[j, :], alpha=0.20, color="crimson")
-        ax.set_xlim(-p["xmax"] * 1e3, p["xmax"] * 1e3)
-        ax.set_ylim(bottom=0.0)
-        ax.set_xlabel("x'  [mm]   (perfil horizontal en y'=0)")
-        ax.set_ylabel("I / I₀")
-        ax.set_title("Perfil de intensidad  I(x', 0)")
-
-    def _update_status(self, p):
-        D_char, z_min, N_F, es_fh = regimen(p)
-        if es_fh:
-            color = "#127a12"
-            etiqueta = "Régimen: FRAUNHOFER — cálculo válido (sinc²/Airy)"
-        else:
-            color = "#c00000"
-            etiqueta = ("Régimen: FRESNEL (campo cercano)\n"
-                        "El patrón sinc²/Airy NO es válido aquí.\n"
-                        "→ usar el Código 22 (Fresnel).")
-        txt = (
-            f"D_char = {D_char*1e6:8.1f} µm\n"
-            f"z_min  = {z_min:8.3f} m   (2·D²/λ)\n"
-            f"z      = {p['z']:8.3f} m\n"
-            f"N_F    = {N_F:8.3f}   (= D²/λz)\n"
-            f"─────────────────────────\n"
-            f"{etiqueta}"
-        )
-        self.status.set(txt)
-        self.status_lbl.configure(foreground=color)
-
-
 # =============================================================================
-# 3. PESTAÑAS DE TALLER
-# =============================================================================
-
-class TabRectanguloRotado:
-    """Ejercicio (taller pto 3): rectángulo a=10µm, b=5µm ROTADO θ=60° en el plano."""
-
-    def __init__(self, parent):
-        self.parent = parent
-        self._build_controls()
-        self._build_figure()
-        self.recompute()
-
-    def _build_controls(self):
-        panel = ttk.Frame(self.parent, padding=8)
-        panel.pack(side="left", fill="y")
-        ttk.Label(panel, text="Rectángulo rotado (lados a×b, giro θ)",
-                  font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
-
-        f1 = ttk.LabelFrame(panel, text="Abertura (µm)", padding=6)
-        f1.pack(fill="x", pady=4)
-        self.a = crear_slider(f1, "a (lado en x)", 1.0, 50.0, 10.0,
-                              self.recompute, "{:.2f}")
-        self.b = crear_slider(f1, "b (lado en y)", 1.0, 50.0, 5.0,
-                              self.recompute, "{:.2f}")
-        self.theta = crear_slider(f1, "θ giro (grados)", 0.0, 180.0, 60.0,
-                                  self.recompute, "{:.1f}")
-
-        f3 = ttk.LabelFrame(panel, text="Fuente / observación", padding=6)
-        f3.pack(fill="x", pady=4)
-        self.lam = crear_slider(f3, "λ (nm)", 380.0, 1000.0, 633.0,
-                                self.recompute, "{:.0f}")
-        self.z = crear_slider(f3, "z (m)", 0.05, 5.0, 1.0, self.recompute, "{:.2f}")
-        self.xmax = crear_slider(f3, "x'_max (mm)", 5.0, 300.0, 100.0,
-                                 self.recompute, "{:.0f}")
-        self.N = crear_slider(f3, "N (px)", 200.0, float(NX_MAX), 500.0,
-                              self.recompute, "{:.0f}")
-
-        f4 = ttk.LabelFrame(panel, text="Escala de intensidad", padding=6)
-        f4.pack(fill="x", pady=4)
-        self.escala = tk.StringVar(value="gamma")
-        for txt, val in (("Lineal", "lineal"), ("γ (0.4)", "gamma"), ("Log", "log")):
-            ttk.Radiobutton(f4, text=txt, variable=self.escala, value=val,
-                            command=self.recompute).pack(side="left")
-
-        st = ttk.LabelFrame(panel, text="Régimen del cálculo", padding=6)
-        st.pack(fill="x", pady=4)
-        self.status = tk.StringVar(value="")
-        self.status_lbl = ttk.Label(st, textvariable=self.status, justify="left",
-                                    font=("Consolas", 9))
-        self.status_lbl.pack(anchor="w")
-
-    def _build_figure(self):
-        right = ttk.Frame(self.parent)
-        right.pack(side="left", fill="both", expand=True)
-        self.fig = Figure(figsize=(10.5, 8.0))
-        gs = self.fig.add_gridspec(2, 2, hspace=0.30, wspace=0.28,
-                                   height_ratios=[1.5, 1])
-        self.ax_ap = self.fig.add_subplot(gs[0, 0])
-        self.ax_pat = self.fig.add_subplot(gs[0, 1])
-        self.ax_prof = self.fig.add_subplot(gs[1, :])
-        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        NavigationToolbar2Tk(self.canvas, right).update()
-
-    def recompute(self):
-        a, b = self.a.get() * 1e-6, self.b.get() * 1e-6
-        theta = np.radians(self.theta.get())
-        lam, z = self.lam.get() * 1e-9, self.z.get()
-        xmax, N = self.xmax.get() * 1e-3, int(self.N.get())
-
-        x = np.linspace(-xmax, xmax, N)
-        X, Y = np.meshgrid(x, x)
-        I = intensidad_rectangulo_rotado(X, Y, a, b, theta, lam, z)
-
-        # --- Abertura a escala (rectángulo con esquinas a 90°, girado θ) ---
-        ax = self.ax_ap
-        ax.clear()
-        um = 1e6
-        av, bv = a * um, b * um
-        c, s = np.cos(theta), np.sin(theta)
-        R = np.array([[c, -s], [s, c]])
-        esquinas = np.array([(-av / 2, -bv / 2), (av / 2, -bv / 2),
-                             (av / 2, bv / 2), (-av / 2, bv / 2)])
-        verts = esquinas @ R.T
-        ax.set_facecolor("#111111")
-        from matplotlib.patches import Polygon
-        ax.add_patch(Polygon(verts, closed=True, facecolor="white", edgecolor="none"))
-        semi = max(av, bv) * 1.1
-        ax.set_xlim(-semi, semi)
-        ax.set_ylim(-semi, semi)
-        ax.set_aspect("equal")
-        ax.set_xlabel("x̃  [µm]")
-        ax.set_ylabel("ỹ  [µm]")
-        ax.set_title("Plano de la abertura (a escala)")
-
-        # --- Patrón 2D ---
-        ax = self.ax_pat
-        ax.clear()
-        ext = xmax * 1e3
-        datos, norm = _escala_norm(I, self.escala.get())
-        ax.imshow(datos, extent=[-ext, ext, -ext, ext], origin="lower",
-                  cmap="inferno", norm=norm,
-                  vmax=(None if norm is not None else max(I.max(), 1e-12)))
-        ax.set_xlabel("x'  [mm]")
-        ax.set_ylabel("y'  [mm]")
-        ax.set_title("Fraunhofer analítico — rectángulo rotado (sinc² girado θ)")
-
-        # --- Perfil ---
-        ax = self.ax_prof
-        ax.clear()
-        j = I.shape[0] // 2
-        ax.plot(x * 1e3, I[j, :], color="crimson", lw=1.0)
-        ax.fill_between(x * 1e3, I[j, :], alpha=0.20, color="crimson")
-        ax.set_xlim(-xmax * 1e3, xmax * 1e3)
-        ax.set_ylim(bottom=0.0)
-        ax.set_xlabel("x'  [mm]   (perfil horizontal en y'=0)")
-        ax.set_ylabel("I / I₀")
-        ax.set_title("Perfil de intensidad  I(x', 0)")
-
-        # --- Régimen ---
-        D_char = np.hypot(a, b)
-        z_min, N_F, es_fh = regimen_generico(D_char, lam, z)
-        _actualizar_status_regimen(self.status, self.status_lbl, D_char, z_min, N_F, es_fh, z)
-
-        self.canvas.draw_idle()
-
-
-class TabCruz:
-    """Ejercicio: abertura en cruz, brazos de ancho a, longitud total L."""
-
-    def __init__(self, parent):
-        self.parent = parent
-        self._build_controls()
-        self._build_figure()
-        self.recompute()
-
-    def _build_controls(self):
-        panel = ttk.Frame(self.parent, padding=8)
-        panel.pack(side="left", fill="y")
-        ttk.Label(panel, text="Abertura en cruz",
-                  font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
-
-        f1 = ttk.LabelFrame(panel, text="Abertura (µm)", padding=6)
-        f1.pack(fill="x", pady=4)
-        self.L = crear_slider(f1, "L  largo total", 20.0, 500.0, 200.0,
-                              self.recompute, "{:.1f}")
-        self.a = crear_slider(f1, "a  ancho brazo", 5.0, 500.0, 50.0,
-                              self.recompute, "{:.1f}")
-
-        f3 = ttk.LabelFrame(panel, text="Fuente / observación", padding=6)
-        f3.pack(fill="x", pady=4)
-        self.lam = crear_slider(f3, "λ (nm)", 380.0, 1000.0, 633.0,
-                                self.recompute, "{:.0f}")
-        self.z = crear_slider(f3, "z (m)", 0.05, 5.0, 1.0, self.recompute, "{:.2f}")
-        self.xmax = crear_slider(f3, "x'_max (mm)", 5.0, 300.0, 60.0,
-                                 self.recompute, "{:.0f}")
-        self.N = crear_slider(f3, "N (px)", 200.0, float(NX_MAX), 500.0,
-                              self.recompute, "{:.0f}")
-
-        f4 = ttk.LabelFrame(panel, text="Escala de intensidad", padding=6)
-        f4.pack(fill="x", pady=4)
-        self.escala = tk.StringVar(value="gamma")
-        for txt, val in (("Lineal", "lineal"), ("γ (0.4)", "gamma"), ("Log", "log")):
-            ttk.Radiobutton(f4, text=txt, variable=self.escala, value=val,
-                            command=self.recompute).pack(side="left")
-
-        st = ttk.LabelFrame(panel, text="Régimen del cálculo", padding=6)
-        st.pack(fill="x", pady=4)
-        self.status = tk.StringVar(value="")
-        self.status_lbl = ttk.Label(st, textvariable=self.status, justify="left",
-                                    font=("Consolas", 9))
-        self.status_lbl.pack(anchor="w")
-
-    def _build_figure(self):
-        right = ttk.Frame(self.parent)
-        right.pack(side="left", fill="both", expand=True)
-        self.fig = Figure(figsize=(10.5, 8.0))
-        gs = self.fig.add_gridspec(2, 2, hspace=0.30, wspace=0.28,
-                                   height_ratios=[1.5, 1])
-        self.ax_ap = self.fig.add_subplot(gs[0, 0])
-        self.ax_pat = self.fig.add_subplot(gs[0, 1])
-        self.ax_prof = self.fig.add_subplot(gs[1, :])
-        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        NavigationToolbar2Tk(self.canvas, right).update()
-
-    def recompute(self):
-        L, a = self.L.get() * 1e-6, self.a.get() * 1e-6
-        a = min(a, L)  # el brazo no puede ser más ancho que largo
-        lam, z = self.lam.get() * 1e-9, self.z.get()
-        xmax, N = self.xmax.get() * 1e-3, int(self.N.get())
-
-        x = np.linspace(-xmax, xmax, N)
-        X, Y = np.meshgrid(x, x)
-        I = intensidad_cruz(X, Y, L, a, lam, z)
-
-        # --- Abertura ---
-        ax = self.ax_ap
-        ax.clear()
-        um = 1e6
-        Lv, av = L * um, a * um
-        ax.set_facecolor("#111111")
-        ax.add_patch(Rectangle((-Lv / 2, -av / 2), Lv, av,
-                               facecolor="white", edgecolor="none"))
-        ax.add_patch(Rectangle((-av / 2, -Lv / 2), av, Lv,
-                               facecolor="white", edgecolor="none"))
-        semi = Lv * 0.65
-        ax.set_xlim(-semi, semi)
-        ax.set_ylim(-semi, semi)
-        ax.set_aspect("equal")
-        ax.set_xlabel("x̃  [µm]")
-        ax.set_ylabel("ỹ  [µm]")
-        ax.set_title("Plano de la abertura (a escala)")
-
-        # --- Patrón 2D ---
-        ax = self.ax_pat
-        ax.clear()
-        ext = xmax * 1e3
-        datos, norm = _escala_norm(I, self.escala.get())
-        ax.imshow(datos, extent=[-ext, ext, -ext, ext], origin="lower",
-                  cmap="inferno", norm=norm,
-                  vmax=(None if norm is not None else max(I.max(), 1e-12)))
-        ax.set_xlabel("x'  [mm]")
-        ax.set_ylabel("y'  [mm]")
-        ax.set_title("Fraunhofer analítico — cruz (unión de sinc²)")
-
-        # --- Perfil ---
-        ax = self.ax_prof
-        ax.clear()
-        j = I.shape[0] // 2
-        ax.plot(x * 1e3, I[j, :], color="crimson", lw=1.0)
-        ax.fill_between(x * 1e3, I[j, :], alpha=0.20, color="crimson")
-        ax.set_xlim(-xmax * 1e3, xmax * 1e3)
-        ax.set_ylim(bottom=0.0)
-        ax.set_xlabel("x'  [mm]   (perfil horizontal en y'=0)")
-        ax.set_ylabel("I / I₀")
-        ax.set_title("Perfil de intensidad  I(x', 0)")
-
-        # --- Régimen ---
-        D_char = L * np.sqrt(2.0)   # diagonal del bounding box L×L
-        z_min, N_F, es_fh = regimen_generico(D_char, lam, z)
-        _actualizar_status_regimen(self.status, self.status_lbl, D_char, z_min, N_F, es_fh, z)
-
-        self.canvas.draw_idle()
-
-
-class TabDosSemicirculos:
-    """
-    Ejercicio (taller pto 9): abertura de DOS SEMICÍRCULOS — mitad superior de
-    radio r1 y mitad inferior de radio r2 (unidas por el diámetro). Casos
-    límite: r1=r2 → círculo (Airy); r2=0 → un solo semicírculo.
-
-    Pide la irradiancia AXIAL en z=4m, λ=500nm — se calcula de forma CERRADA
-    (analítica, vía el área) y además se visualiza el patrón 2D de forma
-    NUMÉRICA (FFT de la máscara rasterizada), declarando en pantalla que ese
-    panel usa un método distinto (numérico) al resto de pestañas.
-    """
-
-    def __init__(self, parent):
-        self.parent = parent
-        self._build_controls()
-        self._build_figure()
-        self.recompute()
-
-    def _build_controls(self):
-        panel = ttk.Frame(self.parent, padding=8)
-        panel.pack(side="left", fill="y")
-        ttk.Label(panel, text="Dos semicírculos (r1 arriba, r2 abajo)",
-                  font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
-
-        f1 = ttk.LabelFrame(panel, text="Abertura (mm)", padding=6)
-        f1.pack(fill="x", pady=4)
-        self.r1 = crear_slider(f1, "r1  (superior)", 0.0, 5.0, 2.0,
-                               self.recompute, "{:.3f}")
-        self.r2 = crear_slider(f1, "r2  (inferior)", 0.0, 5.0, 1.41421,
-                               self.recompute, "{:.3f}")
-
-        f3 = ttk.LabelFrame(panel, text="Fuente / observación", padding=6)
-        f3.pack(fill="x", pady=4)
-        self.lam = crear_slider(f3, "λ (nm)", 380.0, 1000.0, 500.0,
-                                self.recompute, "{:.0f}")
-        self.z = crear_slider(f3, "z (m)", 0.1, 20.0, 4.0, self.recompute, "{:.2f}")
-        self.xmax = crear_slider(f3, "x'_max (mm)", 0.5, 100.0, 4.0,
-                                 self.recompute, "{:.2f}")
-        self.N = crear_slider(f3, "N (px, FFT)", 128.0, float(NX_MAX), 800.0,
-                              self.recompute, "{:.0f}")
-
-        f4 = ttk.LabelFrame(panel, text="Escala de intensidad", padding=6)
-        f4.pack(fill="x", pady=4)
-        self.escala = tk.StringVar(value="gamma")
-        for txt, val in (("Lineal", "lineal"), ("γ (0.4)", "gamma"), ("Log", "log")):
-            ttk.Radiobutton(f4, text=txt, variable=self.escala, value=val,
-                            command=self.recompute).pack(side="left")
-
-        st = ttk.LabelFrame(panel, text="Resultado pedido — irradiancia axial",
-                            padding=6)
-        st.pack(fill="x", pady=4)
-        self.status = tk.StringVar(value="")
-        self.status_lbl = ttk.Label(st, textvariable=self.status, justify="left",
-                                    font=("Consolas", 9))
-        self.status_lbl.pack(anchor="w")
-
-    def _build_figure(self):
-        right = ttk.Frame(self.parent)
-        right.pack(side="left", fill="both", expand=True)
-        self.fig = Figure(figsize=(10.5, 8.0))
-        gs = self.fig.add_gridspec(2, 2, hspace=0.30, wspace=0.28,
-                                   height_ratios=[1.5, 1])
-        self.ax_ap = self.fig.add_subplot(gs[0, 0])
-        self.ax_pat = self.fig.add_subplot(gs[0, 1])
-        self.ax_prof = self.fig.add_subplot(gs[1, :])
-        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        NavigationToolbar2Tk(self.canvas, right).update()
-
-    def recompute(self):
-        r1, r2 = self.r1.get() * 1e-3, self.r2.get() * 1e-3
-        lam, z = self.lam.get() * 1e-9, self.z.get()
-        xmax, N = self.xmax.get() * 1e-3, int(self.N.get())
-        if max(r1, r2) <= 0.0:
-            return
-
-        area = area_dos_semicirculos(r1, r2)
-        I0_axial = irradiancia_axial_relativa(area, lam, z)
-        x_obs, I2D, mascara, x_ap = patron_fft_semicirculos(r1, r2, lam, z, xmax, N)
-
-        # Valor central del FFT (validación cruzada contra el cerrado).
-        j0 = np.argmin(np.abs(x_obs))
-        I_fft_centro = I2D[j0, j0] if I2D.size else float("nan")
-
-        # --- Abertura (máscara rasterizada) ---
-        ax = self.ax_ap
-        ax.clear()
-        ext_ap = x_ap[-1] * 1e3
-        ax.imshow(mascara, extent=[-ext_ap, ext_ap, -ext_ap, ext_ap],
-                  origin="lower", cmap="gray", vmin=0, vmax=1)
-        ax.axhline(0.0, color="orange", lw=0.6, ls=":")  # línea del diámetro común
-        ax.set_xlabel("x̃  [mm]")
-        ax.set_ylabel("ỹ  [mm]")
-        ax.set_title("Máscara de la abertura (rasterizada)")
-        rlim = 3.5 * max(r1, r2) * 1e3
-        ax.set_xlim(-rlim, rlim)
-        ax.set_ylim(-rlim, rlim)
-
-        # --- Patrón 2D (NUMÉRICO, FFT) ---
-        ax = self.ax_pat
-        ax.clear()
-        ext = x_obs[-1] * 1e3 if x_obs.size else xmax * 1e3
-        datos, norm = _escala_norm(I2D, self.escala.get())
-        ax.imshow(datos, extent=[-ext, ext, -ext, ext], origin="lower",
-                  cmap="inferno", norm=norm,
-                  vmax=(None if norm is not None else max(I2D.max(), 1e-12)))
-        ax.set_xlabel("x'  [mm]")
-        ax.set_ylabel("y'  [mm]")
-        ax.set_title("Patrón NUMÉRICO (FFT de la máscara) — no analítico")
-
-        # --- Perfil ---
-        ax = self.ax_prof
-        ax.clear()
-        j = I2D.shape[0] // 2 if I2D.size else 0
-        if I2D.size:
-            ax.plot(x_obs * 1e3, I2D[j, :], color="crimson", lw=1.0)
-            ax.fill_between(x_obs * 1e3, I2D[j, :], alpha=0.20, color="crimson")
-        ax.set_xlim(-xmax * 1e3, xmax * 1e3)
-        ax.set_ylim(bottom=0.0)
-        ax.set_xlabel("x'  [mm]   (perfil horizontal en y'=0)")
-        ax.set_ylabel("I / I₀")
-        ax.set_title("Perfil de intensidad  I(x', 0)  [FFT]")
-
-        # --- Resultado pedido + validación cruzada ---
-        if I_fft_centro > 0:
-            diff_pct = 100.0 * abs(I_fft_centro - I0_axial) / I0_axial
-        else:
-            diff_pct = float("nan")
-        txt = (
-            f"Área abertura = {area*1e6:8.4f} mm²\n"
-            f"λ = {lam*1e9:.0f} nm    z = {z:.2f} m\n"
-            f"─────────────────────────────\n"
-            f"I(0,0)/I₀ [cerrado]  = {I0_axial:10.4e}\n"
-            f"I(0,0)/I₀ [FFT centro] = {I_fft_centro:10.4e}\n"
-            f"diferencia relativa   = {diff_pct:6.2f} %"
-        )
-        self.status.set(txt)
-        self.status_lbl.configure(foreground="#127a12" if diff_pct < 5 else "#c00000")
-
-        self.canvas.draw_idle()
-
-
-class TabDobleCuadrado:
-    """Ejercicio: cuadrados de lado a y 3a, separados 2a borde a borde (D=4a)."""
-
-    def __init__(self, parent):
-        self.parent = parent
-        self._build_controls()
-        self._build_figure()
-        self.recompute()
-
-    def _build_controls(self):
-        panel = ttk.Frame(self.parent, padding=8)
-        panel.pack(side="left", fill="y")
-        ttk.Label(panel, text="Doble cuadrado (a y 3a, separación 2a)",
-                  font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
-
-        f1 = ttk.LabelFrame(panel, text="Abertura (µm)", padding=6)
-        f1.pack(fill="x", pady=4)
-        self.a = crear_slider(f1, "a  (3a automático)", 5.0, 200.0, 50.0,
-                              self.recompute, "{:.1f}")
-
-        f3 = ttk.LabelFrame(panel, text="Fuente / observación", padding=6)
-        f3.pack(fill="x", pady=4)
-        self.lam = crear_slider(f3, "λ (nm)", 380.0, 1000.0, 633.0,
-                                self.recompute, "{:.0f}")
-        self.z = crear_slider(f3, "z (m)", 0.05, 5.0, 2.0, self.recompute, "{:.2f}")
-        self.xmax = crear_slider(f3, "x'_max (mm)", 5.0, 300.0, 60.0,
-                                 self.recompute, "{:.0f}")
-        self.N = crear_slider(f3, "N (px)", 200.0, float(NX_MAX), 500.0,
-                              self.recompute, "{:.0f}")
-
-        f4 = ttk.LabelFrame(panel, text="Escala de intensidad", padding=6)
-        f4.pack(fill="x", pady=4)
-        self.escala = tk.StringVar(value="gamma")
-        for txt, val in (("Lineal", "lineal"), ("γ (0.4)", "gamma"), ("Log", "log")):
-            ttk.Radiobutton(f4, text=txt, variable=self.escala, value=val,
-                            command=self.recompute).pack(side="left")
-
-        st = ttk.LabelFrame(panel, text="Régimen del cálculo", padding=6)
-        st.pack(fill="x", pady=4)
-        self.status = tk.StringVar(value="")
-        self.status_lbl = ttk.Label(st, textvariable=self.status, justify="left",
-                                    font=("Consolas", 9))
-        self.status_lbl.pack(anchor="w")
-
-    def _build_figure(self):
-        right = ttk.Frame(self.parent)
-        right.pack(side="left", fill="both", expand=True)
-        self.fig = Figure(figsize=(10.5, 8.0))
-        gs = self.fig.add_gridspec(2, 2, hspace=0.30, wspace=0.28,
-                                   height_ratios=[1.5, 1])
-        self.ax_ap = self.fig.add_subplot(gs[0, 0])
-        self.ax_pat = self.fig.add_subplot(gs[0, 1])
-        self.ax_prof = self.fig.add_subplot(gs[1, :])
-        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        NavigationToolbar2Tk(self.canvas, right).update()
-
-    def recompute(self):
-        a = self.a.get() * 1e-6
-        lam, z = self.lam.get() * 1e-9, self.z.get()
-        xmax, N = self.xmax.get() * 1e-3, int(self.N.get())
-
-        x = np.linspace(-xmax, xmax, N)
-        X, Y = np.meshgrid(x, x)
-        I, D = intensidad_doble_cuadrado(X, Y, a, lam, z)
-
-        # --- Abertura ---
-        ax = self.ax_ap
-        ax.clear()
-        um = 1e6
-        av, Dv = a * um, D * um
-        x1, x2 = -Dv / 2.0, +Dv / 2.0
-        ax.set_facecolor("#111111")
-        ax.add_patch(Rectangle((x1 - av / 2, -av / 2), av, av,
-                               facecolor="white", edgecolor="none"))
-        ax.add_patch(Rectangle((x2 - 3 * av / 2, -3 * av / 2), 3 * av, 3 * av,
-                               facecolor="white", edgecolor="none"))
-        semi = Dv / 2.0 + 2.5 * av
-        ax.set_xlim(-semi, semi)
-        ax.set_ylim(-semi, semi)
-        ax.set_aspect("equal")
-        ax.set_xlabel("x̃  [µm]")
-        ax.set_ylabel("ỹ  [µm]")
-        ax.set_title(f"Plano de la abertura (D={Dv:.1f} µm, a escala)")
-
-        # --- Patrón 2D ---
-        ax = self.ax_pat
-        ax.clear()
-        ext = xmax * 1e3
-        datos, norm = _escala_norm(I, self.escala.get())
-        ax.imshow(datos, extent=[-ext, ext, -ext, ext], origin="lower",
-                  cmap="inferno", norm=norm,
-                  vmax=(None if norm is not None else max(I.max(), 1e-12)))
-        ax.set_xlabel("x'  [mm]")
-        ax.set_ylabel("y'  [mm]")
-        ax.set_title("Fraunhofer analítico — doble cuadrado (sinc² + interferencia)")
-
-        # --- Perfil ---
-        ax = self.ax_prof
-        ax.clear()
-        j = I.shape[0] // 2
-        ax.plot(x * 1e3, I[j, :], color="crimson", lw=1.0)
-        ax.fill_between(x * 1e3, I[j, :], alpha=0.20, color="crimson")
-        ax.set_xlim(-xmax * 1e3, xmax * 1e3)
-        ax.set_ylim(bottom=0.0)
-        ax.set_xlabel("x'  [mm]   (perfil horizontal en y'=0)")
-        ax.set_ylabel("I / I₀")
-        ax.set_title("Perfil de intensidad  I(x', 0)")
-
-        # --- Régimen ---
-        D_char = D + a / 2.0 + 1.5 * a
-        z_min, N_F, es_fh = regimen_generico(D_char, lam, z)
-        _actualizar_status_regimen(self.status, self.status_lbl, D_char, z_min, N_F, es_fh, z)
-
-        self.canvas.draw_idle()
-
-
-# =============================================================================
-class TabRendijas:
-    """
-    Ejercicio (taller ptos 2 y 6): rendija simple (N=1) y red de difracción de
-    N rendijas. Parametrizado por a/λ y d/λ (adimensionales), así el patrón
-    angular sirve tanto para LUZ como para SONIDO. Se grafica I vs ángulo θ.
-    """
-
-    def __init__(self, parent):
-        self.parent = parent
-        self._build_controls()
-        self._build_figure()
-        self.recompute()
-
-    def _build_controls(self):
-        panel = ttk.Frame(self.parent, padding=8)
-        panel.pack(side="left", fill="y")
-        ttk.Label(panel, text="Rendija(s): 1 a N ranuras",
-                  font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
-
-        f1 = ttk.LabelFrame(panel, text="Red (adimensional)", padding=6)
-        f1.pack(fill="x", pady=4)
-        self.N = crear_slider(f1, "N (nº ranuras)", 1.0, 40.0, 1.0,
-                              self.recompute, "{:.0f}")
-        self.a_lam = crear_slider(f1, "a/λ (ancho)", 0.5, 100.0, 3.18,
-                                  self.recompute, "{:.2f}")
-        self.d_a = crear_slider(f1, "d/a (período/ancho)", 1.0, 10.0, 3.0,
-                                self.recompute, "{:.2f}")
-
-        f2 = ttk.LabelFrame(panel, text="Rango / visualización", padding=6)
-        f2.pack(fill="x", pady=4)
-        self.tmax = crear_slider(f2, "θ_max (grados)", 5.0, 90.0, 80.0,
-                                 self.recompute, "{:.0f}")
-
-        info = ttk.LabelFrame(panel, text="Ayuda (unidades)", padding=6)
-        info.pack(fill="x", pady=4)
-        ttk.Label(info, justify="left", font=("Consolas", 8), text=(
-            "a/λ = ancho de ranura en\n"
-            "  longitudes de onda.\n"
-            "Sonido (pto 2): W=0.84 m,\n"
-            "  λ=343/1300=0.264 m →\n"
-            "  a/λ ≈ 3.18.\n"
-            "N=1 → rendija simple.")).pack(anchor="w")
-
-        st = ttk.LabelFrame(panel, text="Mínimos / órdenes", padding=6)
-        st.pack(fill="x", pady=4)
-        self.status = tk.StringVar(value="")
-        self.status_lbl = ttk.Label(st, textvariable=self.status, justify="left",
-                                    font=("Consolas", 9))
-        self.status_lbl.pack(anchor="w")
-
-    def _build_figure(self):
-        right = ttk.Frame(self.parent)
-        right.pack(side="left", fill="both", expand=True)
-        self.fig = Figure(figsize=(10.5, 8.0))
-        gs = self.fig.add_gridspec(2, 1, hspace=0.32, height_ratios=[1, 1.2])
-        self.ax_pat = self.fig.add_subplot(gs[0, 0])   # patrón 2D (franjas)
-        self.ax_prof = self.fig.add_subplot(gs[1, 0])  # perfil I(θ)
-        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        NavigationToolbar2Tk(self.canvas, right).update()
-
-    def recompute(self):
-        N = int(self.N.get())
-        a_lam = self.a_lam.get()
-        d_lam = self.d_a.get() * a_lam        # d/λ = (d/a)·(a/λ)
-        tmax = np.radians(self.tmax.get())
-
-        theta = np.linspace(-tmax, tmax, 4000)
-        st = np.sin(theta)
-        I = intensidad_rendijas(st, a_lam, d_lam, N)
-        theta_deg = np.degrees(theta)
-
-        # --- Patrón 2D (franjas verticales: rendijas idealizadas ∞ en y) ---
-        ax = self.ax_pat
-        ax.clear()
-        img = np.tile(I, (60, 1))
-        ax.imshow(img, extent=[theta_deg[0], theta_deg[-1], -1, 1],
-                  origin="lower", cmap="inferno", aspect="auto",
-                  vmax=max(I.max(), 1e-12))
-        ax.set_yticks([])
-        ax.set_xlabel("θ  [grados]")
-        titulo = ("Rendija simple (N=1)" if N <= 1
-                  else f"Red de {N} rendijas (a/λ={a_lam:.2f}, d/a={self.d_a.get():.1f})")
-        ax.set_title("Fraunhofer — " + titulo)
-
-        # --- Perfil I(θ) con envolvente de una rendija ---
-        ax = self.ax_prof
-        ax.clear()
-        ax.plot(theta_deg, I, color="crimson", lw=1.0, label="I(θ)")
-        env = np.sinc(a_lam * st) ** 2
-        ax.plot(theta_deg, env, color="steelblue", lw=0.9, ls="--",
-                label="envolvente de 1 rendija")
-        ax.fill_between(theta_deg, I, alpha=0.15, color="crimson")
-        ax.set_xlim(theta_deg[0], theta_deg[-1])
-        ax.set_ylim(bottom=0.0)
-        ax.set_xlabel("θ  [grados]")
-        ax.set_ylabel("I / I₀")
-        ax.legend(fontsize=8, loc="upper right")
-        ax.set_title("Perfil de intensidad  I(θ)")
-
-        # --- Mínimos (rendija) / órdenes (red) ---
-        if N <= 1:
-            mins = angulos_minimos_rendija(a_lam, m_max=4)
-            líneas = "\n".join(f"  mín m={m}: θ = ±{ang:5.2f}°" for m, ang in mins)
-            for _, ang in mins:
-                for signo in (+1, -1):
-                    ax.axvline(signo * ang, color="navy", lw=0.6, ls=":")
-            txt = (f"RENDIJA SIMPLE (N=1)\n"
-                   f"a/λ = {a_lam:.3f}\n"
-                   f"Mínimos  sinθ = m·λ/a:\n{líneas}")
-        else:
-            ords = ordenes_red(d_lam, sin_max=np.sin(tmax))
-            líneas = "\n".join(f"  orden m={m}: θ = ±{ang:5.2f}°" for m, ang in ords)
-            for _, ang in ords:
-                for signo in (+1, -1):
-                    ax.axvline(signo * ang, color="seagreen", lw=0.5, ls=":")
-            txt = (f"RED de N={N} rendijas\n"
-                   f"a/λ = {a_lam:.2f}   d/λ = {d_lam:.2f}\n"
-                   f"Máx. principales  sinθ = m·λ/d:\n{líneas}")
-        self.status.set(txt)
-        self.status_lbl.configure(foreground="#333333")
-
-        self.canvas.draw_idle()
-
-
-class TabEscalon:
-    """
-    Ejercicio (taller pto 15): escalón de Michelson — red de N peldaños de
-    vidrio (índice n, espesor h, saliente s). Cada peldaño es una rendija de
-    ancho s con un desfase extra (n−1)h por el vidrio. Se grafica I frente a
-    la variable normalizada u = s·senθ/λ (los ángulos reales son microscópicos
-    por la enorme dispersión). Valores por defecto: escalón real (h≈1cm, s≈1mm,
-    n≈1.5, N=10).
-    """
-
-    def __init__(self, parent):
-        self.parent = parent
-        self._build_controls()
-        self._build_figure()
-        self.recompute()
-
-    def _build_controls(self):
-        panel = ttk.Frame(self.parent, padding=8)
-        panel.pack(side="left", fill="y")
-        ttk.Label(panel, text="Escalón de Michelson (N peldaños)",
-                  font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
-
-        f1 = ttk.LabelFrame(panel, text="Escalón", padding=6)
-        f1.pack(fill="x", pady=4)
-        self.N = crear_slider(f1, "N (láminas)", 2.0, 30.0, 10.0,
-                              self.recompute, "{:.0f}")
-        self.s = crear_slider(f1, "s saliente (mm)", 0.1, 5.0, 1.0,
-                              self.recompute, "{:.3f}")
-        self.h = crear_slider(f1, "h espesor (mm)", 0.5, 30.0, 10.0,
-                              self.recompute, "{:.2f}")
-        self.n = crear_slider(f1, "n vidrio", 1.3, 2.0, 1.5,
-                              self.recompute, "{:.3f}")
-
-        f2 = ttk.LabelFrame(panel, text="Fuente / rango", padding=6)
-        f2.pack(fill="x", pady=4)
-        self.lam = crear_slider(f2, "λ (nm)", 380.0, 1000.0, 500.0,
-                                self.recompute, "{:.0f}")
-        self.umax = crear_slider(f2, "u_max (=s·senθ/λ)", 1.5, 5.0, 2.5,
-                                 self.recompute, "{:.1f}")
-
-        st = ttk.LabelFrame(panel, text="Resultado", padding=6)
-        st.pack(fill="x", pady=4)
-        self.status = tk.StringVar(value="")
-        self.status_lbl = ttk.Label(st, textvariable=self.status, justify="left",
-                                    font=("Consolas", 9))
-        self.status_lbl.pack(anchor="w")
-
-    def _build_figure(self):
-        right = ttk.Frame(self.parent)
-        right.pack(side="left", fill="both", expand=True)
-        self.fig = Figure(figsize=(10.5, 8.0))
-        gs = self.fig.add_gridspec(2, 1, hspace=0.32, height_ratios=[1, 1.2])
-        self.ax_pat = self.fig.add_subplot(gs[0, 0])
-        self.ax_prof = self.fig.add_subplot(gs[1, 0])
-        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        NavigationToolbar2Tk(self.canvas, right).update()
-
-    def recompute(self):
-        N = int(self.N.get())
-        s, h = self.s.get() * 1e-3, self.h.get() * 1e-3
-        n, lam = self.n.get(), self.lam.get() * 1e-9
-        umax = self.umax.get()
-
-        u = np.linspace(-umax, umax, 8000)          # u = s·senθ/λ
-        sin_theta = u * lam / s
-        I = intensidad_escalon(sin_theta, s, h, n, lam, N)
-
-        # --- Patrón 2D (franjas verticales) ---
-        ax = self.ax_pat
-        ax.clear()
-        ax.imshow(np.tile(I, (60, 1)), extent=[-umax, umax, -1, 1],
-                  origin="lower", cmap="inferno", aspect="auto",
-                  vmax=max(I.max(), 1e-12))
-        ax.set_yticks([])
-        ax.set_xlabel("u = s·senθ/λ")
-        ax.set_title(f"Escalón de Michelson — {N} peldaños")
-
-        # --- Perfil I(u) + envolvente ---
-        ax = self.ax_prof
-        ax.clear()
-        ax.plot(u, I, color="crimson", lw=1.0, label="I(u)")
-        ax.plot(u, np.sinc(u) ** 2, color="steelblue", lw=0.9, ls="--",
-                label="envolvente de 1 peldaño")
-        ax.fill_between(u, I, alpha=0.15, color="crimson")
-        for k in range(-int(umax), int(umax) + 1):    # ceros de la envolvente
-            if k != 0:
-                ax.axvline(k, color="navy", lw=0.5, ls=":")
-        ax.set_xlim(-umax, umax)
-        ax.set_ylim(bottom=0.0)
-        ax.set_xlabel("u = s·senθ/λ    (ceros de difracción en u entero)")
-        ax.set_ylabel("I / I_env")
-        ax.legend(fontsize=8, loc="upper right")
-        ax.set_title("Perfil — máx. principales (peine) bajo la envolvente")
-
-        # --- Resultado numérico ---
-        m0 = (n - 1.0) * h / lam
-        # resolución / dispersión: nº de peldaños N determina el ancho de cada
-        # máximo principal (Δu_FWHM ≈ 1/N); poder resolvente R = m0·N.
-        R = m0 * N
-        txt = (
-            f"Orden central  m₀=(n−1)h/λ = {m0:,.0f}\n"
-            f"Poder resolvente  R=m₀·N ≈ {R:,.0f}\n"
-            f"─────────────────────────────\n"
-            f"Máximos principales por máximo\n"
-            f"de difracción ≈ 2  (Δu=2 = 2\n"
-            f"espaciados de orden; se ven 1–2\n"
-            f"según el desfase (n−1)h/λ)"
-        )
-        self.status.set(txt)
-        self.status_lbl.configure(foreground="#333333")
-
-        self.canvas.draw_idle()
-
-
-class TabDobleCirculo:
-    """
-    Ejercicio (taller pto 19): abertura de doble círculo — disco de radio r1 en
-    3 cuadrantes, extendido a r2 en el cuadrante superior-derecho. Con z=2m y
-    λ=500nm los radios son las zonas de Fresnel 1 (r1=1mm) y 2 (r2=1.414mm).
-
-    EXCEPCIÓN a la regla "Código 20 = solo Fraunhofer": esta pestaña muestra
-    AMBOS regímenes sobre la misma abertura — el patrón Fraunhofer (campo
-    lejano, |𝓕|²) y el patrón Fresnel (campo cercano, motor `fresnel_propagate`
-    reutilizable por el Código 22) — porque el enunciado pide Fresnel pero se
-    quiere ver también el resultado de campo lejano. Se declara explícitamente
-    que a z=2m el régimen físico REAL es Fresnel (respuesta 1.5A, 2.25I); el
-    valor Fraunhofer (15.3·I) es el de campo lejano, no válido a esta z.
-    """
-
-    def __init__(self, parent):
-        self.parent = parent
-        self._build_controls()
-        self._build_figure()
-        self.recompute()
-
-    def _build_controls(self):
-        panel = ttk.Frame(self.parent, padding=8)
-        panel.pack(side="left", fill="y")
-        ttk.Label(panel, text="Doble círculo — Fraunhofer y Fresnel",
-                  font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
-
-        f1 = ttk.LabelFrame(panel, text="Abertura (mm)", padding=6)
-        f1.pack(fill="x", pady=4)
-        self.r1 = crear_slider(f1, "r1 (3 cuadrantes)", 0.2, 3.0, 1.0,
-                               self.recompute, "{:.3f}")
-        self.r2 = crear_slider(f1, "r2 (cuad. sup-der)", 0.2, 4.0, 1.41,
-                               self.recompute, "{:.3f}")
-
-        f2 = ttk.LabelFrame(panel, text="Fuente / observación", padding=6)
-        f2.pack(fill="x", pady=4)
-        self.lam = crear_slider(f2, "λ (nm)", 380.0, 1000.0, 500.0,
-                                self.recompute, "{:.0f}")
-        self.z = crear_slider(f2, "z (m)", 0.5, 40.0, 2.0, self.recompute, "{:.2f}")
-        self.xmax = crear_slider(f2, "x'_max (mm)", 1.0, 60.0, 8.0,
-                                 self.recompute, "{:.1f}")
-        self.N = crear_slider(f2, "N (px, FFT)", 256.0, 2048.0, 1024.0,
-                              self.recompute, "{:.0f}")
-
-        f3 = ttk.LabelFrame(panel, text="Escala de intensidad", padding=6)
-        f3.pack(fill="x", pady=4)
-        self.escala = tk.StringVar(value="gamma")
-        for txt, val in (("Lineal", "lineal"), ("γ (0.4)", "gamma"), ("Log", "log")):
-            ttk.Radiobutton(f3, text=txt, variable=self.escala, value=val,
-                            command=self.recompute).pack(side="left")
-
-        st = ttk.LabelFrame(panel, text="Valores axiales en P'", padding=6)
-        st.pack(fill="x", pady=4)
-        self.status = tk.StringVar(value="")
-        self.status_lbl = ttk.Label(st, textvariable=self.status, justify="left",
-                                    font=("Consolas", 9))
-        self.status_lbl.pack(anchor="w")
-
-    def _build_figure(self):
-        right = ttk.Frame(self.parent)
-        right.pack(side="left", fill="both", expand=True)
-        self.fig = Figure(figsize=(10.5, 8.0))
-        gs = self.fig.add_gridspec(2, 2, hspace=0.30, wspace=0.28)
-        self.ax_ap = self.fig.add_subplot(gs[0, 0])
-        self.ax_fh = self.fig.add_subplot(gs[0, 1])
-        self.ax_fr = self.fig.add_subplot(gs[1, 0])
-        self.ax_prof = self.fig.add_subplot(gs[1, 1])
-        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        NavigationToolbar2Tk(self.canvas, right).update()
-
-    def recompute(self):
-        r1, r2 = self.r1.get() * 1e-3, self.r2.get() * 1e-3
-        lam, z = self.lam.get() * 1e-9, self.z.get()
-        N = int(self.N.get())
-
-        d = patrones_doble_circulo(r1, r2, lam, z, N)
-        c = N // 2
-        I_fr_axial = d["I_fresnel"][c, c]
-        I_fh_axial = d["I_fraunhofer"][c, c]
-
-        # Recorte al centro para visualizar (la ventana FFT es ~10× el patrón).
-        xmax = self.xmax.get() * 1e-3
-        sel = np.abs(d["x_obs"]) <= xmax
-        x_obs = d["x_obs"][sel]
-        I_fr = d["I_fresnel"][np.ix_(sel, sel)]
-        I_fh = d["I_fraunhofer"][np.ix_(sel, sel)]
-
-        # --- Máscara ---
-        ax = self.ax_ap
-        ax.clear()
-        ext_ap = d["x_ap"][-1] * 1e3
-        ax.imshow(d["mascara"], extent=[-ext_ap, ext_ap, -ext_ap, ext_ap],
-                  origin="lower", cmap="gray", vmin=0, vmax=1)
-        ax.set_title("Abertura (3 cuad. r₁ + ¼ r₂)")
-        ax.set_xlabel("x̃ [mm]")
-        ax.set_ylabel("ỹ [mm]")
-        rlim = 1.6 * max(r1, r2) * 1e3
-        ax.set_xlim(-rlim, rlim)
-        ax.set_ylim(-rlim, rlim)
-
-        # --- Fraunhofer 2D ---
-        ext = xmax * 1e3
-        ax = self.ax_fh
-        ax.clear()
-        datos, norm = _escala_norm(I_fh, self.escala.get())
-        ax.imshow(datos, extent=[-ext, ext, -ext, ext], origin="lower",
-                  cmap="inferno", norm=norm,
-                  vmax=(None if norm is not None else I_fh.max()))
-        ax.set_title("Fraunhofer (campo lejano)")
-        ax.set_xlabel("x' [mm]")
-
-        # --- Fresnel 2D ---
-        ax = self.ax_fr
-        ax.clear()
-        datos, norm = _escala_norm(I_fr, self.escala.get())
-        ax.imshow(datos, extent=[-ext, ext, -ext, ext], origin="lower",
-                  cmap="inferno", norm=norm,
-                  vmax=(None if norm is not None else I_fr.max()))
-        ax.set_title("Fresnel (campo cercano)")
-        ax.set_xlabel("x' [mm]")
-        ax.set_ylabel("y' [mm]")
-
-        # --- Perfiles comparados ---
-        ax = self.ax_prof
-        ax.clear()
-        xo = x_obs * 1e3
-        cc = I_fr.shape[0] // 2
-        ax.plot(xo, I_fr[cc, :], color="crimson", lw=1.0, label="Fresnel")
-        ax.plot(xo, I_fh[cc, :], color="steelblue", lw=0.9, label="Fraunhofer")
-        ax.set_xlim(xo[0], xo[-1])
-        ax.set_ylim(bottom=0.0)
-        ax.set_xlabel("x' [mm]  (perfil en y'=0)")
-        ax.set_ylabel("I / I_inc")
-        ax.legend(fontsize=8, loc="upper right")
-        ax.set_title("Perfiles I(x',0)")
-
-        # --- Régimen + valores axiales ---
-        D_char = 2.0 * max(r1, r2)
-        z_min, N_F, es_fh = regimen_generico(D_char, lam, z)
-        regimen_txt = ("FRAUNHOFER válido" if es_fh
-                       else "FRESNEL (campo cercano)")
-        txt = (
-            f"λ={lam*1e9:.0f}nm  z={z:.2f}m\n"
-            f"r₁={r1*1e3:.3f}  r₂={r2*1e3:.3f} mm\n"
-            f"─────────────────────────\n"
-            f"Fresnel   |U|/A={np.sqrt(I_fr_axial):5.3f}  I/I={I_fr_axial:6.3f}\n"
-            f"Fraunhofer          I/I={I_fh_axial:7.3f}\n"
-            f"─────────────────────────\n"
-            f"Régimen real: {regimen_txt}\n"
-            f"z_min=2D²/λ={z_min:.1f}m  N_F={N_F:.2f}"
-        )
-        self.status.set(txt)
-        self.status_lbl.configure(foreground="#127a12" if es_fh else "#c00000")
-
-        self.canvas.draw_idle()
-
-
-class TabRedesCascada:
-    """
-    Ejercicio (taller pto 6): dos redes de difracción idénticas apiladas
-    (N ranuras de ancho a, período d=3a), con la red 2 desplazable una cantidad
-    s hasta que dejan de solaparse (s=N·d). Se grafica I(senθ). Controles
-    protagonistas: a (ancho de ranura) y N (nº de ranuras), más el
-    desplazamiento s; λ y z como sliders.
-    """
-
-    def __init__(self, parent):
-        self.parent = parent
-        self._build_controls()
-        self._build_figure()
-        self.recompute()
-
-    def _build_controls(self):
-        panel = ttk.Frame(self.parent, padding=8)
-        panel.pack(side="left", fill="y")
-        ttk.Label(panel, text="Dos redes en cascada (d=3a)",
-                  font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
-
-        f1 = ttk.LabelFrame(panel, text="Redes (críticos: a y N)", padding=6)
-        f1.pack(fill="x", pady=4)
-        self.a = crear_slider(f1, "a ranura (mm)", 0.05, 1.0, 0.2,
-                              self.recompute, "{:.3f}")
-        self.N = crear_slider(f1, "N ranuras", 2.0, 20.0, 8.0,
-                              self.recompute, "{:.0f}")
-
-        f2 = ttk.LabelFrame(panel, text="Desplazamiento red 2", padding=6)
-        f2.pack(fill="x", pady=4)
-        self.s = crear_slider(f2, "s (mm)", 0.0, 5.0, 0.0,
-                              self.recompute, "{:.3f}")
-
-        f3 = ttk.LabelFrame(panel, text="Fuente / observación", padding=6)
-        f3.pack(fill="x", pady=4)
-        self.lam = crear_slider(f3, "λ (nm)", 380.0, 1000.0, 633.0,
-                                self.recompute, "{:.0f}")
-        self.z = crear_slider(f3, "z (m)", 0.1, 20.0, 1.0, self.recompute, "{:.2f}")
-
-        st = ttk.LabelFrame(panel, text="Órdenes y desplazamiento", padding=6)
-        st.pack(fill="x", pady=4)
-        self.status = tk.StringVar(value="")
-        self.status_lbl = ttk.Label(st, textvariable=self.status, justify="left",
-                                    font=("Consolas", 9))
-        self.status_lbl.pack(anchor="w")
-
-    def _build_figure(self):
-        right = ttk.Frame(self.parent)
-        right.pack(side="left", fill="both", expand=True)
-        self.fig = Figure(figsize=(10.5, 8.0))
-        gs = self.fig.add_gridspec(3, 1, hspace=0.45,
-                                   height_ratios=[0.7, 0.6, 1.3])
-        self.ax_red = self.fig.add_subplot(gs[0, 0])   # diagrama espacio real
-        self.ax_pat = self.fig.add_subplot(gs[1, 0])   # franjas 2D
-        self.ax_prof = self.fig.add_subplot(gs[2, 0])  # perfil I(senθ)
-        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        NavigationToolbar2Tk(self.canvas, right).update()
-
-    def recompute(self):
-        a = self.a.get() * 1e-3
-        N = int(self.N.get())
-        d = 3.0 * a
-        W = N * d                                    # s límite (dejan de solapar)
-        s = min(self.s.get() * 1e-3, W)              # clamp al límite de solape
-        lam, z = self.lam.get() * 1e-9, self.z.get()
-
-        sen, I, d, W = patron_redes_cascada(a, N, s, lam)
-        # rango de visualización: ~4 lóbulos de la envolvente de 1 ranura
-        smax = 4.0 * lam / a
-        sel = np.abs(sen) <= smax
-        sen_v, I_v = sen[sel], I[sel]
-
-        # --- Diagrama en espacio real: red 1, red 2(−s), solape ---
-        ax = self.ax_red
-        ax.clear()
-        xr = np.linspace(-2.5 * d, 2.5 * d, 3000)
-        t1 = transmision_redes(xr, a, d, N, 0.0).clip(0, 1)
-        # red2 desplazada: uso una sola red evaluada con corrimiento
-        centros = (np.arange(N) - (N - 1) / 2.0) * d
-        r1 = np.zeros_like(xr); r2 = np.zeros_like(xr)
-        for c in centros:
-            r1 += (xr >= c - a / 2) & (xr <= c + a / 2)
-            r2 += (xr >= c - a / 2 + s) & (xr <= c + a / 2 + s)
-        solape = (r1 * r2).clip(0, 1)
-        xr_mm = xr * 1e3
-        ax.fill_between(xr_mm, 2.4, 3.2, where=r1 > 0, color="#3b6", step="mid")
-        ax.fill_between(xr_mm, 1.3, 2.1, where=r2 > 0, color="#38c", step="mid")
-        ax.fill_between(xr_mm, 0.2, 1.0, where=solape > 0, color="#e33", step="mid")
-        ax.text(xr_mm[0], 2.8, " red 1", va="center", fontsize=8)
-        ax.text(xr_mm[0], 1.7, " red 2", va="center", fontsize=8)
-        ax.text(xr_mm[0], 0.6, " solape", va="center", fontsize=8)
-        ax.set_ylim(0, 3.4)
-        ax.set_yticks([])
-        ax.set_xlim(xr_mm[0], xr_mm[-1])
-        ax.set_xlabel("x̃ [mm]  (transmisión efectiva = solape)")
-        ax.set_title("Redes en espacio real (red 2 desplazada s)")
-
-        # --- Franjas 2D ---
-        ax = self.ax_pat
-        ax.clear()
-        ax.imshow(np.tile(I_v, (40, 1)),
-                  extent=[sen_v[0], sen_v[-1], -1, 1], origin="lower",
-                  cmap="inferno", aspect="auto", vmin=0, vmax=1.0)
-        ax.set_yticks([])
-        ax.set_xlabel("senθ")
-        ax.set_title("Patrón de difracción")
-
-        # --- Perfil I(senθ) + envolvente + órdenes ---
-        ax = self.ax_prof
-        ax.clear()
-        ax.plot(sen_v, I_v, color="crimson", lw=1.0, label="I(senθ)")
-        ax.plot(sen_v, np.sinc(a * sen_v / lam) ** 2, color="steelblue",
-                lw=0.9, ls="--", label="envolvente de 1 ranura")
-        ax.fill_between(sen_v, I_v, alpha=0.15, color="crimson")
-        m = 1
-        while m * lam / d <= smax:
-            for signo in (+1, -1):
-                col = "navy" if m % 3 else "gray"
-                ax.axvline(signo * m * lam / d, color=col, lw=0.5, ls=":")
-            m += 1
-        ax.set_xlim(-smax, smax)
-        ax.set_ylim(0, max(1.05, I_v.max() * 1.1))
-        ax.set_xlabel("senθ   (órdenes en mλ/d; grises = múltiplos de 3, faltan)")
-        ax.set_ylabel("I / I₀(s=0)")
-        ax.legend(fontsize=8, loc="upper right")
-        ax.set_title("Perfil de intensidad")
-
-        # --- Estado ---
-        s_mm, W_mm = s * 1e3, W * 1e3
-        # tramo oscuro dentro del período actual
-        s_frac = s % d
-        oscuro = a <= s_frac <= 2 * a
-        n_perdidas = int(s // d)
-        obs = "0, ±1, ±2, ±4, ±5, ±7 …  (faltan ±3, ±6: múltiplos de d/a=3)"
-        txt = (
-            f"d = 3a = {d*1e3:.3f} mm\n"
-            f"s_sep (dejan de solapar) = N·d = {W_mm:.2f} mm\n"
-            f"─────────────────────────────\n"
-            f"Alineadas (s=0): órdenes\n  {obs}\n"
-            f"─────────────────────────────\n"
-            f"s = {s_mm:.3f} mm   ({'CAMPO OSCURO' if oscuro else 'con solape'})\n"
-            f"ranuras que aún solapan ≈ {max(N - n_perdidas, 0)}\n"
-            f"Al desplazar: posiciones de orden\n"
-            f"FIJAS (d cte); reaparecen los\n"
-            f"múltiplos de 3; I total ↓ → 0 en\n"
-            f"s∈[a,2a] (mod d) y en s=N·d."
-        )
-        self.status.set(txt)
-        self.status_lbl.configure(foreground="#c00000" if oscuro else "#333333")
-
-        self.canvas.draw_idle()
-
-
-# =============================================================================
-# 4. UTILIDADES COMPARTIDAS DE DIBUJO (usadas solo por las pestañas de taller)
+# 3. DIBUJO — helpers compartidos por los render de cada abertura
 # =============================================================================
 
 def _escala_norm(I, modo):
-    """Misma lógica que `FraunhoferGUI._escala_norm`, como función libre para
-    que la reutilicen las pestañas de taller sin depender de esa clase."""
+    """Devuelve (datos, norm) según la escala de visualización elegida
+    ('lineal'/'gamma'/'log'). Función libre reutilizada por todos los render y
+    también importada por el Código 22."""
     if modo == "log":
         piso = I.max() * 1e-5 if I.max() > 0 else 1e-9
         return I + piso, LogNorm(vmin=piso, vmax=max(I.max(), piso * 10))
     if modo == "gamma":
         return I, PowerNorm(gamma=0.4, vmin=0.0, vmax=max(I.max(), 1e-12))
-    return I, None
+    return I, None  # lineal
 
 
-def _actualizar_status_regimen(status_var, status_lbl, D_char, z_min, N_F, es_fh, z):
-    """Misma caja de estado verde/rojo de la Pestaña 0, reutilizada aquí."""
+def _status_regimen(D_char, z_min, N_F, es_fh, z, metodo="sinc²"):
+    """Texto y color de la caja de régimen (verde=Fraunhofer, rojo=Fresnel).
+    Devuelve (txt, color) — el host los escribe en el widget de status."""
     if es_fh:
         color = "#127a12"
-        etiqueta = "Régimen: FRAUNHOFER — cálculo válido (sinc²)"
+        etiqueta = f"Régimen: FRAUNHOFER — cálculo válido ({metodo})"
     else:
         color = "#c00000"
-        etiqueta = ("Régimen: FRESNEL (campo cercano)\n"
-                    "El patrón sinc² NO es válido aquí.\n"
-                    "→ usar el Código 22 (Fresnel).")
+        etiqueta = (f"Régimen: FRESNEL (campo cercano)\n"
+                    f"El patrón {metodo} NO es válido aquí.\n"
+                    f"→ usar el Código 22 (Fresnel).")
     txt = (
         f"D_char = {D_char*1e6:8.1f} µm\n"
         f"z_min  = {z_min:8.3f} m   (2·D²/λ)\n"
@@ -1906,52 +641,1028 @@ def _actualizar_status_regimen(status_var, status_lbl, D_char, z_min, N_F, es_fh
         f"─────────────────────────\n"
         f"{etiqueta}"
     )
-    status_var.set(txt)
-    status_lbl.configure(foreground=color)
+    return txt, color
+
+
+# =============================================================================
+# 4. RENDER POR ABERTURA
+#    Cada función arma su propio gridspec (layout heterogéneo), calcula la
+#    física (funciones del núcleo, sin tocar) y dibuja. Recibe:
+#       fig  : la Figure compartida (se limpia con fig.clf())
+#       p    : dict {clave: valor en SI}  (ya convertido por el host)
+#       modo : escala de intensidad ('lineal'/'gamma'/'log')
+#    Devuelve (status_txt, status_color).
+# =============================================================================
+
+def render_marco_circulo(fig, p, modo):
+    Npx = int(p["N"])
+    x = np.linspace(-p["xmax"], p["xmax"], Npx)
+    X, Y = np.meshgrid(x, x)
+    I = intensidad(X, Y, p)
+
+    fig.clf()
+    gs = fig.add_gridspec(2, 2, hspace=0.30, wspace=0.28, height_ratios=[1.5, 1])
+    ax_ap = fig.add_subplot(gs[0, 0])
+    ax_pat = fig.add_subplot(gs[0, 1])
+    ax_prof = fig.add_subplot(gs[1, :])
+
+    um = 1e6
+    a, b, c, d = p["a"] * um, p["b"] * um, p["c"] * um, p["d"] * um
+    R, D = p["R"] * um, p["D"] * um
+    xm, xc = -D / 2.0, +D / 2.0
+    ax_ap.set_facecolor("#111111")
+    if a > 0 and b > 0:
+        ax_ap.add_patch(Rectangle((xm - a / 2, -b / 2), a, b,
+                                  facecolor="white", edgecolor="none"))
+    if c > 0 and d > 0:
+        ax_ap.add_patch(Rectangle((xm - c / 2, -d / 2), c, d,
+                                  facecolor="#111111", edgecolor="none"))
+    if R > 0:
+        ax_ap.add_patch(Circle((xc, 0.0), R, facecolor="white", edgecolor="none"))
+    if D > 0:
+        ytop = max(b, 2 * R) / 2 * 1.15 + 5
+        ax_ap.annotate("", xy=(xc, ytop), xytext=(xm, ytop),
+                       arrowprops=dict(arrowstyle="<->", color="orange"))
+        ax_ap.text(0.0, ytop + 4, "D", color="orange", ha="center",
+                   va="bottom", fontsize=11)
+    semi = max(a, c, 2 * R) / 2 + D / 2 + 10
+    semiy = max(b, 2 * R) / 2 * 1.15 + 20
+    ax_ap.set_xlim(-semi, semi)
+    ax_ap.set_ylim(-semiy, semiy)
+    ax_ap.set_aspect("equal")
+    ax_ap.set_xlabel("x̃  [µm]")
+    ax_ap.set_ylabel("ỹ  [µm]")
+    ax_ap.set_title("Plano de la abertura (a escala)")
+
+    ext = p["xmax"] * 1e3
+    datos, norm = _escala_norm(I, modo)
+    ax_pat.imshow(datos, extent=[-ext, ext, -ext, ext], origin="lower",
+                  cmap="inferno", norm=norm,
+                  vmax=(None if norm is not None else max(I.max(), 1e-12)))
+    ax_pat.set_xlabel("x'  [mm]")
+    ax_pat.set_ylabel("y'  [mm]")
+    ax_pat.set_title("Fraunhofer analítico — sinc² (marco) + Airy (círculo)")
+
+    j = I.shape[0] // 2
+    ax_prof.plot(x * 1e3, I[j, :], color="crimson", lw=1.0)
+    ax_prof.fill_between(x * 1e3, I[j, :], alpha=0.20, color="crimson")
+    ax_prof.set_xlim(-p["xmax"] * 1e3, p["xmax"] * 1e3)
+    ax_prof.set_ylim(bottom=0.0)
+    ax_prof.set_xlabel("x'  [mm]   (perfil horizontal en y'=0)")
+    ax_prof.set_ylabel("I / I₀")
+    ax_prof.set_title("Perfil de intensidad  I(x', 0)")
+
+    D_char, z_min, N_F, es_fh = regimen(p)
+    return _status_regimen(D_char, z_min, N_F, es_fh, p["z"], metodo="sinc²/Airy")
+
+
+def render_rectangulo_rotado(fig, p, modo):
+    a, b, theta = p["a"], p["b"], p["theta"]
+    lam, z = p["lam"], p["z"]
+    xmax, Npx = p["xmax"], int(p["N"])
+    x = np.linspace(-xmax, xmax, Npx)
+    X, Y = np.meshgrid(x, x)
+    I = intensidad_rectangulo_rotado(X, Y, a, b, theta, lam, z)
+
+    fig.clf()
+    gs = fig.add_gridspec(2, 2, hspace=0.30, wspace=0.28, height_ratios=[1.5, 1])
+    ax_ap = fig.add_subplot(gs[0, 0])
+    ax_pat = fig.add_subplot(gs[0, 1])
+    ax_prof = fig.add_subplot(gs[1, :])
+
+    from matplotlib.patches import Polygon
+    um = 1e6
+    av, bv = a * um, b * um
+    cth, sth = np.cos(theta), np.sin(theta)
+    Rm = np.array([[cth, -sth], [sth, cth]])
+    esquinas = np.array([(-av / 2, -bv / 2), (av / 2, -bv / 2),
+                         (av / 2, bv / 2), (-av / 2, bv / 2)])
+    verts = esquinas @ Rm.T
+    ax_ap.set_facecolor("#111111")
+    ax_ap.add_patch(Polygon(verts, closed=True, facecolor="white", edgecolor="none"))
+    semi = max(av, bv) * 1.1
+    ax_ap.set_xlim(-semi, semi)
+    ax_ap.set_ylim(-semi, semi)
+    ax_ap.set_aspect("equal")
+    ax_ap.set_xlabel("x̃  [µm]")
+    ax_ap.set_ylabel("ỹ  [µm]")
+    ax_ap.set_title("Plano de la abertura (a escala)")
+
+    ext = xmax * 1e3
+    datos, norm = _escala_norm(I, modo)
+    ax_pat.imshow(datos, extent=[-ext, ext, -ext, ext], origin="lower",
+                  cmap="inferno", norm=norm,
+                  vmax=(None if norm is not None else max(I.max(), 1e-12)))
+    ax_pat.set_xlabel("x'  [mm]")
+    ax_pat.set_ylabel("y'  [mm]")
+    ax_pat.set_title("Fraunhofer analítico — rectángulo rotado (sinc² girado θ)")
+
+    j = I.shape[0] // 2
+    ax_prof.plot(x * 1e3, I[j, :], color="crimson", lw=1.0)
+    ax_prof.fill_between(x * 1e3, I[j, :], alpha=0.20, color="crimson")
+    ax_prof.set_xlim(-xmax * 1e3, xmax * 1e3)
+    ax_prof.set_ylim(bottom=0.0)
+    ax_prof.set_xlabel("x'  [mm]   (perfil horizontal en y'=0)")
+    ax_prof.set_ylabel("I / I₀")
+    ax_prof.set_title("Perfil de intensidad  I(x', 0)")
+
+    D_char = np.hypot(a, b)
+    z_min, N_F, es_fh = regimen_generico(D_char, lam, z)
+    return _status_regimen(D_char, z_min, N_F, es_fh, z)
+
+
+def render_cruz(fig, p, modo):
+    L, a = p["L"], min(p["a"], p["L"])
+    lam, z = p["lam"], p["z"]
+    xmax, Npx = p["xmax"], int(p["N"])
+    x = np.linspace(-xmax, xmax, Npx)
+    X, Y = np.meshgrid(x, x)
+    I = intensidad_cruz(X, Y, L, a, lam, z)
+
+    fig.clf()
+    gs = fig.add_gridspec(2, 2, hspace=0.30, wspace=0.28, height_ratios=[1.5, 1])
+    ax_ap = fig.add_subplot(gs[0, 0])
+    ax_pat = fig.add_subplot(gs[0, 1])
+    ax_prof = fig.add_subplot(gs[1, :])
+
+    um = 1e6
+    Lv, av = L * um, a * um
+    ax_ap.set_facecolor("#111111")
+    ax_ap.add_patch(Rectangle((-Lv / 2, -av / 2), Lv, av,
+                              facecolor="white", edgecolor="none"))
+    ax_ap.add_patch(Rectangle((-av / 2, -Lv / 2), av, Lv,
+                              facecolor="white", edgecolor="none"))
+    semi = Lv * 0.65
+    ax_ap.set_xlim(-semi, semi)
+    ax_ap.set_ylim(-semi, semi)
+    ax_ap.set_aspect("equal")
+    ax_ap.set_xlabel("x̃  [µm]")
+    ax_ap.set_ylabel("ỹ  [µm]")
+    ax_ap.set_title("Plano de la abertura (a escala)")
+
+    ext = xmax * 1e3
+    datos, norm = _escala_norm(I, modo)
+    ax_pat.imshow(datos, extent=[-ext, ext, -ext, ext], origin="lower",
+                  cmap="inferno", norm=norm,
+                  vmax=(None if norm is not None else max(I.max(), 1e-12)))
+    ax_pat.set_xlabel("x'  [mm]")
+    ax_pat.set_ylabel("y'  [mm]")
+    ax_pat.set_title("Fraunhofer analítico — cruz (unión de sinc²)")
+
+    j = I.shape[0] // 2
+    ax_prof.plot(x * 1e3, I[j, :], color="crimson", lw=1.0)
+    ax_prof.fill_between(x * 1e3, I[j, :], alpha=0.20, color="crimson")
+    ax_prof.set_xlim(-xmax * 1e3, xmax * 1e3)
+    ax_prof.set_ylim(bottom=0.0)
+    ax_prof.set_xlabel("x'  [mm]   (perfil horizontal en y'=0)")
+    ax_prof.set_ylabel("I / I₀")
+    ax_prof.set_title("Perfil de intensidad  I(x', 0)")
+
+    D_char = L * np.sqrt(2.0)
+    z_min, N_F, es_fh = regimen_generico(D_char, lam, z)
+    return _status_regimen(D_char, z_min, N_F, es_fh, z)
+
+
+def render_dos_semicirculos(fig, p, modo):
+    r1, r2 = p["r1"], p["r2"]
+    lam, z = p["lam"], p["z"]
+    xmax, N = p["xmax"], int(p["N"])
+
+    fig.clf()
+    gs = fig.add_gridspec(2, 2, hspace=0.30, wspace=0.28, height_ratios=[1.5, 1])
+    ax_ap = fig.add_subplot(gs[0, 0])
+    ax_pat = fig.add_subplot(gs[0, 1])
+    ax_prof = fig.add_subplot(gs[1, :])
+
+    if max(r1, r2) <= 0.0:
+        return "Sin abertura (r1 = r2 = 0)", "#c00000"
+
+    area = area_dos_semicirculos(r1, r2)
+    I0_axial = irradiancia_axial_relativa(area, lam, z)
+    x_obs, I2D, mascara, x_ap = patron_fft_semicirculos(r1, r2, lam, z, xmax, N)
+
+    j0 = np.argmin(np.abs(x_obs))
+    I_fft_centro = I2D[j0, j0] if I2D.size else float("nan")
+
+    ext_ap = x_ap[-1] * 1e3
+    ax_ap.imshow(mascara, extent=[-ext_ap, ext_ap, -ext_ap, ext_ap],
+                 origin="lower", cmap="gray", vmin=0, vmax=1)
+    ax_ap.axhline(0.0, color="orange", lw=0.6, ls=":")
+    ax_ap.set_xlabel("x̃  [mm]")
+    ax_ap.set_ylabel("ỹ  [mm]")
+    ax_ap.set_title("Máscara de la abertura (rasterizada)")
+    rlim = 3.5 * max(r1, r2) * 1e3
+    ax_ap.set_xlim(-rlim, rlim)
+    ax_ap.set_ylim(-rlim, rlim)
+
+    ext = x_obs[-1] * 1e3 if x_obs.size else xmax * 1e3
+    datos, norm = _escala_norm(I2D, modo)
+    ax_pat.imshow(datos, extent=[-ext, ext, -ext, ext], origin="lower",
+                  cmap="inferno", norm=norm,
+                  vmax=(None if norm is not None else max(I2D.max(), 1e-12)))
+    ax_pat.set_xlabel("x'  [mm]")
+    ax_pat.set_ylabel("y'  [mm]")
+    ax_pat.set_title("Patrón NUMÉRICO (FFT de la máscara) — no analítico")
+
+    j = I2D.shape[0] // 2 if I2D.size else 0
+    if I2D.size:
+        ax_prof.plot(x_obs * 1e3, I2D[j, :], color="crimson", lw=1.0)
+        ax_prof.fill_between(x_obs * 1e3, I2D[j, :], alpha=0.20, color="crimson")
+    ax_prof.set_xlim(-xmax * 1e3, xmax * 1e3)
+    ax_prof.set_ylim(bottom=0.0)
+    ax_prof.set_xlabel("x'  [mm]   (perfil horizontal en y'=0)")
+    ax_prof.set_ylabel("I / I₀")
+    ax_prof.set_title("Perfil de intensidad  I(x', 0)  [FFT]")
+
+    if I_fft_centro > 0:
+        diff_pct = 100.0 * abs(I_fft_centro - I0_axial) / I0_axial
+    else:
+        diff_pct = float("nan")
+    txt = (
+        f"Área abertura = {area*1e6:8.4f} mm²\n"
+        f"λ = {lam*1e9:.0f} nm    z = {z:.2f} m\n"
+        f"─────────────────────────────\n"
+        f"I(0,0)/I₀ [cerrado]  = {I0_axial:10.4e}\n"
+        f"I(0,0)/I₀ [FFT centro] = {I_fft_centro:10.4e}\n"
+        f"diferencia relativa   = {diff_pct:6.2f} %"
+    )
+    return txt, ("#127a12" if diff_pct < 5 else "#c00000")
+
+
+def render_doble_cuadrado(fig, p, modo):
+    a = p["a"]
+    lam, z = p["lam"], p["z"]
+    xmax, Npx = p["xmax"], int(p["N"])
+    x = np.linspace(-xmax, xmax, Npx)
+    X, Y = np.meshgrid(x, x)
+    I, D = intensidad_doble_cuadrado(X, Y, a, lam, z)
+
+    fig.clf()
+    gs = fig.add_gridspec(2, 2, hspace=0.30, wspace=0.28, height_ratios=[1.5, 1])
+    ax_ap = fig.add_subplot(gs[0, 0])
+    ax_pat = fig.add_subplot(gs[0, 1])
+    ax_prof = fig.add_subplot(gs[1, :])
+
+    um = 1e6
+    av, Dv = a * um, D * um
+    x1, x2 = -Dv / 2.0, +Dv / 2.0
+    ax_ap.set_facecolor("#111111")
+    ax_ap.add_patch(Rectangle((x1 - av / 2, -av / 2), av, av,
+                              facecolor="white", edgecolor="none"))
+    ax_ap.add_patch(Rectangle((x2 - 3 * av / 2, -3 * av / 2), 3 * av, 3 * av,
+                              facecolor="white", edgecolor="none"))
+    semi = Dv / 2.0 + 2.5 * av
+    ax_ap.set_xlim(-semi, semi)
+    ax_ap.set_ylim(-semi, semi)
+    ax_ap.set_aspect("equal")
+    ax_ap.set_xlabel("x̃  [µm]")
+    ax_ap.set_ylabel("ỹ  [µm]")
+    ax_ap.set_title(f"Plano de la abertura (D={Dv:.1f} µm, a escala)")
+
+    ext = xmax * 1e3
+    datos, norm = _escala_norm(I, modo)
+    ax_pat.imshow(datos, extent=[-ext, ext, -ext, ext], origin="lower",
+                  cmap="inferno", norm=norm,
+                  vmax=(None if norm is not None else max(I.max(), 1e-12)))
+    ax_pat.set_xlabel("x'  [mm]")
+    ax_pat.set_ylabel("y'  [mm]")
+    ax_pat.set_title("Fraunhofer analítico — doble cuadrado (sinc² + interferencia)")
+
+    j = I.shape[0] // 2
+    ax_prof.plot(x * 1e3, I[j, :], color="crimson", lw=1.0)
+    ax_prof.fill_between(x * 1e3, I[j, :], alpha=0.20, color="crimson")
+    ax_prof.set_xlim(-xmax * 1e3, xmax * 1e3)
+    ax_prof.set_ylim(bottom=0.0)
+    ax_prof.set_xlabel("x'  [mm]   (perfil horizontal en y'=0)")
+    ax_prof.set_ylabel("I / I₀")
+    ax_prof.set_title("Perfil de intensidad  I(x', 0)")
+
+    D_char = D + a / 2.0 + 1.5 * a
+    z_min, N_F, es_fh = regimen_generico(D_char, lam, z)
+    return _status_regimen(D_char, z_min, N_F, es_fh, z)
+
+
+def render_rendijas(fig, p, modo):
+    N = int(p["N"])
+    a_lam = p["a_lam"]
+    d_a = p["d_a"]
+    d_lam = d_a * a_lam
+    tmax = p["tmax"]
+
+    theta = np.linspace(-tmax, tmax, 4000)
+    st = np.sin(theta)
+    I = intensidad_rendijas(st, a_lam, d_lam, N)
+    theta_deg = np.degrees(theta)
+
+    fig.clf()
+    gs = fig.add_gridspec(2, 1, hspace=0.32, height_ratios=[1, 1.2])
+    ax_pat = fig.add_subplot(gs[0, 0])
+    ax_prof = fig.add_subplot(gs[1, 0])
+
+    img = np.tile(I, (60, 1))
+    ax_pat.imshow(img, extent=[theta_deg[0], theta_deg[-1], -1, 1],
+                  origin="lower", cmap="inferno", aspect="auto",
+                  vmax=max(I.max(), 1e-12))
+    ax_pat.set_yticks([])
+    ax_pat.set_xlabel("θ  [grados]")
+    titulo = ("Rendija simple (N=1)" if N <= 1
+              else f"Red de {N} rendijas (a/λ={a_lam:.2f}, d/a={d_a:.1f})")
+    ax_pat.set_title("Fraunhofer — " + titulo)
+
+    ax_prof.plot(theta_deg, I, color="crimson", lw=1.0, label="I(θ)")
+    env = np.sinc(a_lam * st) ** 2
+    ax_prof.plot(theta_deg, env, color="steelblue", lw=0.9, ls="--",
+                 label="envolvente de 1 rendija")
+    ax_prof.fill_between(theta_deg, I, alpha=0.15, color="crimson")
+    ax_prof.set_xlim(theta_deg[0], theta_deg[-1])
+    ax_prof.set_ylim(bottom=0.0)
+    ax_prof.set_xlabel("θ  [grados]")
+    ax_prof.set_ylabel("I / I₀")
+    ax_prof.legend(fontsize=8, loc="upper right")
+    ax_prof.set_title("Perfil de intensidad  I(θ)")
+
+    if N <= 1:
+        mins = angulos_minimos_rendija(a_lam, m_max=4)
+        lineas = "\n".join(f"  mín m={m}: θ = ±{ang:5.2f}°" for m, ang in mins)
+        for _, ang in mins:
+            for signo in (+1, -1):
+                ax_prof.axvline(signo * ang, color="navy", lw=0.6, ls=":")
+        txt = (f"RENDIJA SIMPLE (N=1)\n"
+               f"a/λ = {a_lam:.3f}\n"
+               f"Mínimos  sinθ = m·λ/a:\n{lineas}")
+    else:
+        ords = ordenes_red(d_lam, sin_max=np.sin(tmax))
+        lineas = "\n".join(f"  orden m={m}: θ = ±{ang:5.2f}°" for m, ang in ords)
+        for _, ang in ords:
+            for signo in (+1, -1):
+                ax_prof.axvline(signo * ang, color="seagreen", lw=0.5, ls=":")
+        txt = (f"RED de N={N} rendijas\n"
+               f"a/λ = {a_lam:.2f}   d/λ = {d_lam:.2f}\n"
+               f"Máx. principales  sinθ = m·λ/d:\n{lineas}")
+    return txt, "#333333"
+
+
+def render_escalon(fig, p, modo):
+    N = int(p["N"])
+    s, h = p["s"], p["h"]
+    n, lam = p["n"], p["lam"]
+    umax = p["umax"]
+
+    u = np.linspace(-umax, umax, 8000)
+    sin_theta = u * lam / s
+    I = intensidad_escalon(sin_theta, s, h, n, lam, N)
+
+    fig.clf()
+    gs = fig.add_gridspec(2, 1, hspace=0.32, height_ratios=[1, 1.2])
+    ax_pat = fig.add_subplot(gs[0, 0])
+    ax_prof = fig.add_subplot(gs[1, 0])
+
+    ax_pat.imshow(np.tile(I, (60, 1)), extent=[-umax, umax, -1, 1],
+                  origin="lower", cmap="inferno", aspect="auto",
+                  vmax=max(I.max(), 1e-12))
+    ax_pat.set_yticks([])
+    ax_pat.set_xlabel("u = s·senθ/λ")
+    ax_pat.set_title(f"Escalón de Michelson — {N} peldaños")
+
+    ax_prof.plot(u, I, color="crimson", lw=1.0, label="I(u)")
+    ax_prof.plot(u, np.sinc(u) ** 2, color="steelblue", lw=0.9, ls="--",
+                 label="envolvente de 1 peldaño")
+    ax_prof.fill_between(u, I, alpha=0.15, color="crimson")
+    for k in range(-int(umax), int(umax) + 1):
+        if k != 0:
+            ax_prof.axvline(k, color="navy", lw=0.5, ls=":")
+    ax_prof.set_xlim(-umax, umax)
+    ax_prof.set_ylim(bottom=0.0)
+    ax_prof.set_xlabel("u = s·senθ/λ    (ceros de difracción en u entero)")
+    ax_prof.set_ylabel("I / I_env")
+    ax_prof.legend(fontsize=8, loc="upper right")
+    ax_prof.set_title("Perfil — máx. principales (peine) bajo la envolvente")
+
+    m0 = (n - 1.0) * h / lam
+    R = m0 * N
+    txt = (
+        f"Orden central  m₀=(n−1)h/λ = {m0:,.0f}\n"
+        f"Poder resolvente  R=m₀·N ≈ {R:,.0f}\n"
+        f"─────────────────────────────\n"
+        f"Máximos principales por máximo\n"
+        f"de difracción ≈ 2  (Δu=2 = 2\n"
+        f"espaciados de orden; se ven 1–2\n"
+        f"según el desfase (n−1)h/λ)"
+    )
+    return txt, "#333333"
+
+
+def render_doble_circulo(fig, p, modo):
+    r1, r2 = p["r1"], p["r2"]
+    lam, z = p["lam"], p["z"]
+    N = int(p["N"])
+
+    d = patrones_doble_circulo(r1, r2, lam, z, N)
+    c = N // 2
+    I_fr_axial = d["I_fresnel"][c, c]
+    I_fh_axial = d["I_fraunhofer"][c, c]
+
+    xmax = p["xmax"]
+    sel = np.abs(d["x_obs"]) <= xmax
+    x_obs = d["x_obs"][sel]
+    I_fr = d["I_fresnel"][np.ix_(sel, sel)]
+    I_fh = d["I_fraunhofer"][np.ix_(sel, sel)]
+
+    fig.clf()
+    gs = fig.add_gridspec(2, 2, hspace=0.30, wspace=0.28)
+    ax_ap = fig.add_subplot(gs[0, 0])
+    ax_fh = fig.add_subplot(gs[0, 1])
+    ax_fr = fig.add_subplot(gs[1, 0])
+    ax_prof = fig.add_subplot(gs[1, 1])
+
+    ext_ap = d["x_ap"][-1] * 1e3
+    ax_ap.imshow(d["mascara"], extent=[-ext_ap, ext_ap, -ext_ap, ext_ap],
+                 origin="lower", cmap="gray", vmin=0, vmax=1)
+    ax_ap.set_title("Abertura (3 cuad. r₁ + ¼ r₂)")
+    ax_ap.set_xlabel("x̃ [mm]")
+    ax_ap.set_ylabel("ỹ [mm]")
+    rlim = 1.6 * max(r1, r2) * 1e3
+    ax_ap.set_xlim(-rlim, rlim)
+    ax_ap.set_ylim(-rlim, rlim)
+
+    ext = xmax * 1e3
+    datos, norm = _escala_norm(I_fh, modo)
+    ax_fh.imshow(datos, extent=[-ext, ext, -ext, ext], origin="lower",
+                 cmap="inferno", norm=norm,
+                 vmax=(None if norm is not None else I_fh.max()))
+    ax_fh.set_title("Fraunhofer (campo lejano)")
+    ax_fh.set_xlabel("x' [mm]")
+
+    datos, norm = _escala_norm(I_fr, modo)
+    ax_fr.imshow(datos, extent=[-ext, ext, -ext, ext], origin="lower",
+                 cmap="inferno", norm=norm,
+                 vmax=(None if norm is not None else I_fr.max()))
+    ax_fr.set_title("Fresnel (campo cercano)")
+    ax_fr.set_xlabel("x' [mm]")
+    ax_fr.set_ylabel("y' [mm]")
+
+    xo = x_obs * 1e3
+    cc = I_fr.shape[0] // 2
+    ax_prof.plot(xo, I_fr[cc, :], color="crimson", lw=1.0, label="Fresnel")
+    ax_prof.plot(xo, I_fh[cc, :], color="steelblue", lw=0.9, label="Fraunhofer")
+    ax_prof.set_xlim(xo[0], xo[-1])
+    ax_prof.set_ylim(bottom=0.0)
+    ax_prof.set_xlabel("x' [mm]  (perfil en y'=0)")
+    ax_prof.set_ylabel("I / I_inc")
+    ax_prof.legend(fontsize=8, loc="upper right")
+    ax_prof.set_title("Perfiles I(x',0)")
+
+    D_char = 2.0 * max(r1, r2)
+    z_min, N_F, es_fh = regimen_generico(D_char, lam, z)
+    regimen_txt = ("FRAUNHOFER válido" if es_fh else "FRESNEL (campo cercano)")
+    txt = (
+        f"λ={lam*1e9:.0f}nm  z={z:.2f}m\n"
+        f"r₁={r1*1e3:.3f}  r₂={r2*1e3:.3f} mm\n"
+        f"─────────────────────────\n"
+        f"Fresnel   |U|/A={np.sqrt(I_fr_axial):5.3f}  I/I={I_fr_axial:6.3f}\n"
+        f"Fraunhofer          I/I={I_fh_axial:7.3f}\n"
+        f"─────────────────────────\n"
+        f"Régimen real: {regimen_txt}\n"
+        f"z_min=2D²/λ={z_min:.1f}m  N_F={N_F:.2f}"
+    )
+    return txt, ("#127a12" if es_fh else "#c00000")
+
+
+def render_redes_cascada(fig, p, modo):
+    a = p["a"]
+    N = int(p["N"])
+    d = 3.0 * a
+    W = N * d
+    s = min(p["s"], W)
+    lam, z = p["lam"], p["z"]
+
+    sen, I, d, W = patron_redes_cascada(a, N, s, lam)
+    smax = 4.0 * lam / a
+    sel = np.abs(sen) <= smax
+    sen_v, I_v = sen[sel], I[sel]
+
+    fig.clf()
+    gs = fig.add_gridspec(3, 1, hspace=0.45, height_ratios=[0.7, 0.6, 1.3])
+    ax_red = fig.add_subplot(gs[0, 0])
+    ax_pat = fig.add_subplot(gs[1, 0])
+    ax_prof = fig.add_subplot(gs[2, 0])
+
+    xr = np.linspace(-2.5 * d, 2.5 * d, 3000)
+    centros = (np.arange(N) - (N - 1) / 2.0) * d
+    r1 = np.zeros_like(xr)
+    r2 = np.zeros_like(xr)
+    for cc in centros:
+        r1 += (xr >= cc - a / 2) & (xr <= cc + a / 2)
+        r2 += (xr >= cc - a / 2 + s) & (xr <= cc + a / 2 + s)
+    solape = (r1 * r2).clip(0, 1)
+    xr_mm = xr * 1e3
+    ax_red.fill_between(xr_mm, 2.4, 3.2, where=r1 > 0, color="#3b6", step="mid")
+    ax_red.fill_between(xr_mm, 1.3, 2.1, where=r2 > 0, color="#38c", step="mid")
+    ax_red.fill_between(xr_mm, 0.2, 1.0, where=solape > 0, color="#e33", step="mid")
+    ax_red.text(xr_mm[0], 2.8, " red 1", va="center", fontsize=8)
+    ax_red.text(xr_mm[0], 1.7, " red 2", va="center", fontsize=8)
+    ax_red.text(xr_mm[0], 0.6, " solape", va="center", fontsize=8)
+    ax_red.set_ylim(0, 3.4)
+    ax_red.set_yticks([])
+    ax_red.set_xlim(xr_mm[0], xr_mm[-1])
+    ax_red.set_xlabel("x̃ [mm]  (transmisión efectiva = solape)")
+    ax_red.set_title("Redes en espacio real (red 2 desplazada s)")
+
+    ax_pat.imshow(np.tile(I_v, (40, 1)),
+                  extent=[sen_v[0], sen_v[-1], -1, 1], origin="lower",
+                  cmap="inferno", aspect="auto", vmin=0, vmax=1.0)
+    ax_pat.set_yticks([])
+    ax_pat.set_xlabel("senθ")
+    ax_pat.set_title("Patrón de difracción")
+
+    ax_prof.plot(sen_v, I_v, color="crimson", lw=1.0, label="I(senθ)")
+    ax_prof.plot(sen_v, np.sinc(a * sen_v / lam) ** 2, color="steelblue",
+                 lw=0.9, ls="--", label="envolvente de 1 ranura")
+    ax_prof.fill_between(sen_v, I_v, alpha=0.15, color="crimson")
+    m = 1
+    while m * lam / d <= smax:
+        for signo in (+1, -1):
+            col = "navy" if m % 3 else "gray"
+            ax_prof.axvline(signo * m * lam / d, color=col, lw=0.5, ls=":")
+        m += 1
+    ax_prof.set_xlim(-smax, smax)
+    ax_prof.set_ylim(0, max(1.05, I_v.max() * 1.1))
+    ax_prof.set_xlabel("senθ   (órdenes en mλ/d; grises = múltiplos de 3, faltan)")
+    ax_prof.set_ylabel("I / I₀(s=0)")
+    ax_prof.legend(fontsize=8, loc="upper right")
+    ax_prof.set_title("Perfil de intensidad")
+
+    s_mm, W_mm = s * 1e3, W * 1e3
+    s_frac = s % d
+    oscuro = a <= s_frac <= 2 * a
+    n_perdidas = int(s // d)
+    obs = "0, ±1, ±2, ±4, ±5, ±7 …  (faltan ±3, ±6: múltiplos de d/a=3)"
+    txt = (
+        f"d = 3a = {d*1e3:.3f} mm\n"
+        f"s_sep (dejan de solapar) = N·d = {W_mm:.2f} mm\n"
+        f"─────────────────────────────\n"
+        f"Alineadas (s=0): órdenes\n  {obs}\n"
+        f"─────────────────────────────\n"
+        f"s = {s_mm:.3f} mm   ({'CAMPO OSCURO' if oscuro else 'con solape'})\n"
+        f"ranuras que aún solapan ≈ {max(N - n_perdidas, 0)}\n"
+        f"Al desplazar: posiciones de orden\n"
+        f"FIJAS (d cte); reaparecen los\n"
+        f"múltiplos de 3; I total ↓ → 0 en\n"
+        f"s∈[a,2a] (mod d) y en s=N·d."
+    )
+    return txt, ("#c00000" if oscuro else "#333333")
+
+
+# =============================================================================
+# 4B. PERFIL DE INTENSIDAD ABSOLUTA (sin normalizar) — corte y'=0
+#    abs_*(p) → (x' [m], I_abs, I_norm), con I_abs = |U|² relativa a la onda
+#    plana incidente (amplitud 1): centro Fraunhofer = (Área/λz)². Para las
+#    analíticas se escala la I normalizada del núcleo por (Área/λz)²; para las
+#    numéricas (FFT) el patrón ya viene en esa escala absoluta.
+# =============================================================================
+
+def abs_marco_circulo(p):
+    x = np.linspace(-p["xmax"], p["xmax"], int(p["N"]))
+    I_norm = intensidad(x, np.zeros_like(x), p)
+    A0 = p["a"] * p["b"] - p["c"] * p["d"] + np.pi * p["R"] ** 2
+    k = (A0 / (p["lam"] * p["z"])) ** 2
+    return x, I_norm * k, I_norm
+
+
+def abs_rectangulo_rotado(p):
+    x = np.linspace(-p["xmax"], p["xmax"], int(p["N"]))
+    I_norm = intensidad_rectangulo_rotado(x, np.zeros_like(x), p["a"], p["b"],
+                                          p["theta"], p["lam"], p["z"])
+    k = ((p["a"] * p["b"]) / (p["lam"] * p["z"])) ** 2
+    return x, I_norm * k, I_norm
+
+
+def abs_cruz(p):
+    L, a = p["L"], min(p["a"], p["L"])
+    x = np.linspace(-p["xmax"], p["xmax"], int(p["N"]))
+    I_norm = intensidad_cruz(x, np.zeros_like(x), L, a, p["lam"], p["z"])
+    area = 2.0 * L * a - a * a
+    k = (area / (p["lam"] * p["z"])) ** 2
+    return x, I_norm * k, I_norm
+
+
+def abs_doble_cuadrado(p):
+    x = np.linspace(-p["xmax"], p["xmax"], int(p["N"]))
+    I_norm, _ = intensidad_doble_cuadrado(x, np.zeros_like(x), p["a"],
+                                          p["lam"], p["z"])
+    area = 10.0 * p["a"] ** 2
+    k = (area / (p["lam"] * p["z"])) ** 2
+    return x, I_norm * k, I_norm
+
+
+def abs_dos_semicirculos(p):
+    x_obs, I2D, _, _ = patron_fft_semicirculos(
+        p["r1"], p["r2"], p["lam"], p["z"], p["xmax"], int(p["N"]))
+    if not I2D.size:
+        z = np.zeros(1)
+        return z, z, z
+    j = I2D.shape[0] // 2
+    I_abs = I2D[j, :]                       # ya absoluto (|U|², I0 incidente=1)
+    axial = I_abs[np.argmin(np.abs(x_obs))]
+    I_norm = I_abs / axial if axial > 0 else I_abs
+    return x_obs, I_abs, I_norm
+
+
+def abs_doble_circulo(p):
+    d = patrones_doble_circulo(p["r1"], p["r2"], p["lam"], p["z"], int(p["N"]))
+    xo = d["x_obs"]
+    sel = np.abs(xo) <= p["xmax"]
+    xo = xo[sel]
+    Ifh = d["I_fraunhofer"][np.ix_(sel, sel)]  # ya absoluto (campo lejano)
+    cc = Ifh.shape[0] // 2
+    I_abs = Ifh[cc, :]
+    N = int(p["N"])
+    axial = d["I_fraunhofer"][N // 2, N // 2]
+    I_norm = I_abs / axial if axial > 0 else I_abs
+    return xo, I_abs, I_norm
+
+
+# =============================================================================
+# 5. REGISTRO DE ABERTURAS
+#    nombre → dict(titulo, sliders, usa_escala, render, expr [, status_titulo, abs])
+#    sliders: lista de (clave, label, frm, to, init, escala_a_SI, fmt)
+#    render(fig, p, modo) → (status_txt, status_color);  p = {clave: valor SI}
+#    expr: fórmula analítica de I (dato; su visualización es el cambio C)
+#    abs (opcional): perfil de intensidad absoluta → usado por la pestaña 2
+# =============================================================================
+
+_ESC_RAD = np.pi / 180.0  # grados → radianes (multiplicador para el modelo escala_SI)
+
+APERTURAS_20 = {
+    "Dos aberturas (marco + círculo) — pto 1": {
+        "titulo": "Difracción de Fraunhofer",
+        "usa_escala": True,
+        "sliders": [
+            ("a", "a  ext. ancho", 0.0, 400.0, 120.0, 1e-6, "{:.1f}"),
+            ("b", "b  ext. alto", 0.0, 400.0, 160.0, 1e-6, "{:.1f}"),
+            ("c", "c  int. ancho", 0.0, 400.0, 60.0, 1e-6, "{:.1f}"),
+            ("d", "d  int. alto", 0.0, 400.0, 90.0, 1e-6, "{:.1f}"),
+            ("R", "R  radio", 0.0, 300.0, 80.0, 1e-6, "{:.1f}"),
+            ("D", "D  separación", 0.0, 1500.0, 400.0, 1e-6, "{:.1f}"),
+            ("lam", "λ (nm)", 380.0, 1000.0, 633.0, 1e-9, "{:.0f}"),
+            ("z", "z (m)", 0.05, 20.0, 5.0, 1.0, "{:.2f}"),
+            ("xmax", "x'_max (mm)", 1.0, 80.0, 25.0, 1e-3, "{:.1f}"),
+            ("N", "N (px)", 200.0, float(NX_MAX), 500.0, 1.0, "{:.0f}"),
+        ],
+        "render": render_marco_circulo,
+        "abs": abs_marco_circulo,
+        "expr": ("I = A_marco² + A_círc² + 2·A_marco·A_círc·cos(2πD·fx)\n"
+                 "A_marco = ab·sinc(a·fx)sinc(b·fy) − cd·sinc(c·fx)sinc(d·fy)\n"
+                 "A_círc  = πR²·2J₁(2πRρ)/(2πRρ)"),
+    },
+    "Rectángulo rotado — pto 3": {
+        "titulo": "Rectángulo rotado (lados a×b, giro θ)",
+        "usa_escala": True,
+        "sliders": [
+            ("a", "a (lado en x)", 1.0, 50.0, 10.0, 1e-6, "{:.2f}"),
+            ("b", "b (lado en y)", 1.0, 50.0, 5.0, 1e-6, "{:.2f}"),
+            ("theta", "θ giro (grados)", 0.0, 180.0, 60.0, _ESC_RAD, "{:.1f}"),
+            ("lam", "λ (nm)", 380.0, 1000.0, 633.0, 1e-9, "{:.0f}"),
+            ("z", "z (m)", 0.05, 5.0, 1.0, 1.0, "{:.2f}"),
+            ("xmax", "x'_max (mm)", 5.0, 300.0, 100.0, 1e-3, "{:.0f}"),
+            ("N", "N (px)", 200.0, float(NX_MAX), 500.0, 1.0, "{:.0f}"),
+        ],
+        "render": render_rectangulo_rotado,
+        "abs": abs_rectangulo_rotado,
+        "expr": ("I = sinc²(a·f_a)·sinc²(b·f_b)\n"
+                 "f_a = fx·cosθ + fy·senθ    f_b = −fx·senθ + fy·cosθ"),
+    },
+    "Cruz — pto 5": {
+        "titulo": "Abertura en cruz",
+        "usa_escala": True,
+        "sliders": [
+            ("L", "L  largo total", 20.0, 500.0, 200.0, 1e-6, "{:.1f}"),
+            ("a", "a  ancho brazo", 5.0, 500.0, 50.0, 1e-6, "{:.1f}"),
+            ("lam", "λ (nm)", 380.0, 1000.0, 633.0, 1e-9, "{:.0f}"),
+            ("z", "z (m)", 0.05, 5.0, 1.0, 1.0, "{:.2f}"),
+            ("xmax", "x'_max (mm)", 5.0, 300.0, 60.0, 1e-3, "{:.0f}"),
+            ("N", "N (px)", 200.0, float(NX_MAX), 500.0, 1.0, "{:.0f}"),
+        ],
+        "render": render_cruz,
+        "abs": abs_cruz,
+        "expr": ("I = |La·sinc(L·fx)sinc(a·fy) + aL·sinc(a·fx)sinc(L·fy)\n"
+                 "     − a²·sinc(a·fx)sinc(a·fy)|² / (2La − a²)²"),
+    },
+    "Dos semicírculos — pto 9": {
+        "titulo": "Dos semicírculos (r1 arriba, r2 abajo)",
+        "usa_escala": True,
+        "status_titulo": "Resultado pedido — irradiancia axial",
+        "sliders": [
+            ("r1", "r1  (superior)", 0.0, 5.0, 2.0, 1e-3, "{:.3f}"),
+            ("r2", "r2  (inferior)", 0.0, 5.0, 1.41421, 1e-3, "{:.3f}"),
+            ("lam", "λ (nm)", 380.0, 1000.0, 500.0, 1e-9, "{:.0f}"),
+            ("z", "z (m)", 0.1, 20.0, 4.0, 1.0, "{:.2f}"),
+            ("xmax", "x'_max (mm)", 0.5, 100.0, 4.0, 1e-3, "{:.2f}"),
+            ("N", "N (px, FFT)", 128.0, float(NX_MAX), 800.0, 1.0, "{:.0f}"),
+        ],
+        "render": render_dos_semicirculos,
+        "abs": abs_dos_semicirculos,
+        "expr": ("Numérico (FFT de la máscara). Axial:\n"
+                 "I(0,0)/I₀ = (Área/λz)²,  Área = π(r1²+r2²)/2"),
+    },
+    "Doble cuadrado — pto 14": {
+        "titulo": "Doble cuadrado (a y 3a, separación 2a)",
+        "usa_escala": True,
+        "sliders": [
+            ("a", "a  (3a automático)", 5.0, 200.0, 50.0, 1e-6, "{:.1f}"),
+            ("lam", "λ (nm)", 380.0, 1000.0, 633.0, 1e-9, "{:.0f}"),
+            ("z", "z (m)", 0.05, 5.0, 2.0, 1.0, "{:.2f}"),
+            ("xmax", "x'_max (mm)", 5.0, 300.0, 60.0, 1e-3, "{:.0f}"),
+            ("N", "N (px)", 200.0, float(NX_MAX), 500.0, 1.0, "{:.0f}"),
+        ],
+        "render": render_doble_cuadrado,
+        "abs": abs_doble_cuadrado,
+        "expr": ("I = A1² + A2² + 2A1A2·cos(2πD·fx),  D = 4a\n"
+                 "A1 = a²·sinc(a·fx)sinc(a·fy)\n"
+                 "A2 = 9a²·sinc(3a·fx)sinc(3a·fy)"),
+    },
+    "Rendija(s) 1..N — ptos 2/6": {
+        "titulo": "Rendija(s): 1 a N ranuras",
+        "usa_escala": False,
+        "status_titulo": "Mínimos / órdenes",
+        "sliders": [
+            ("N", "N (nº ranuras)", 1.0, 40.0, 1.0, 1.0, "{:.0f}"),
+            ("a_lam", "a/λ (ancho)", 0.5, 100.0, 3.18, 1.0, "{:.2f}"),
+            ("d_a", "d/a (período/ancho)", 1.0, 10.0, 3.0, 1.0, "{:.2f}"),
+            ("tmax", "θ_max (grados)", 5.0, 90.0, 80.0, _ESC_RAD, "{:.0f}"),
+        ],
+        "render": render_rendijas,
+        "expr": "I = sinc²(a·senθ/λ)·[sin(Nπd·senθ/λ)/(N·sin(πd·senθ/λ))]²",
+    },
+    "Escalón de Michelson — pto 15": {
+        "titulo": "Escalón de Michelson (N peldaños)",
+        "usa_escala": False,
+        "status_titulo": "Resultado",
+        "sliders": [
+            ("N", "N (láminas)", 2.0, 30.0, 10.0, 1.0, "{:.0f}"),
+            ("s", "s saliente (mm)", 0.1, 5.0, 1.0, 1e-3, "{:.3f}"),
+            ("h", "h espesor (mm)", 0.5, 30.0, 10.0, 1e-3, "{:.2f}"),
+            ("n", "n vidrio", 1.3, 2.0, 1.5, 1.0, "{:.3f}"),
+            ("lam", "λ (nm)", 380.0, 1000.0, 500.0, 1e-9, "{:.0f}"),
+            ("umax", "u_max (=s·senθ/λ)", 1.5, 5.0, 2.5, 1.0, "{:.1f}"),
+        ],
+        "render": render_escalon,
+        "expr": ("I = sinc²(s·senθ/λ)·[sin(NπΔ/λ)/(N·sin(πΔ/λ))]²\n"
+                 "Δ = (n−1)h + s·senθ"),
+    },
+    "Doble círculo (Fh+Fr) — pto 19": {
+        "titulo": "Doble círculo — Fraunhofer y Fresnel",
+        "usa_escala": True,
+        "status_titulo": "Valores axiales en P'",
+        "sliders": [
+            ("r1", "r1 (3 cuadrantes)", 0.2, 3.0, 1.0, 1e-3, "{:.3f}"),
+            ("r2", "r2 (cuad. sup-der)", 0.2, 4.0, 1.41, 1e-3, "{:.3f}"),
+            ("lam", "λ (nm)", 380.0, 1000.0, 500.0, 1e-9, "{:.0f}"),
+            ("z", "z (m)", 0.5, 40.0, 2.0, 1.0, "{:.2f}"),
+            ("xmax", "x'_max (mm)", 1.0, 60.0, 8.0, 1e-3, "{:.1f}"),
+            ("N", "N (px, FFT)", 256.0, 2048.0, 1024.0, 1.0, "{:.0f}"),
+        ],
+        "render": render_doble_circulo,
+        "abs": abs_doble_circulo,
+        "expr": ("Numérico (FFT). Fraunhofer axial (Área/λz)²;\n"
+                 "Fresnel vía zonas. Área = ¾πr1² + ¼πr2²"),
+    },
+    "Redes en cascada — pto 6": {
+        "titulo": "Dos redes en cascada (d=3a)",
+        "usa_escala": False,
+        "status_titulo": "Órdenes y desplazamiento",
+        "sliders": [
+            ("a", "a ranura (mm)", 0.05, 1.0, 0.2, 1e-3, "{:.3f}"),
+            ("N", "N ranuras", 2.0, 20.0, 8.0, 1.0, "{:.0f}"),
+            ("s", "s (mm)", 0.0, 5.0, 0.0, 1e-3, "{:.3f}"),
+            ("lam", "λ (nm)", 380.0, 1000.0, 633.0, 1e-9, "{:.0f}"),
+            ("z", "z (m)", 0.1, 20.0, 1.0, 1.0, "{:.2f}"),
+        ],
+        "render": render_redes_cascada,
+        "expr": "I = |𝓕{t₁(x)·t₂(x−s)}|²   (FFT 1D de la transmisión)",
+    },
+}
+
+
+# =============================================================================
+# 6. HOST — una sola ventana con selector de abertura
+# =============================================================================
+
+class HostFraunhofer:
+    """Envoltura única: Combobox de abertura + sliders reconstruidos por
+    abertura + una figura cuyo layout arma el render de cada caso."""
+
+    def __init__(self, parent):
+        self.parent = parent
+        self._pv = []           # [(clave, DoubleVar, escala_a_SI), ...]
+        self._build_controls()
+        self._build_figure()
+        self._on_aperture()     # construye sliders + primer cálculo
+
+    def _build_controls(self):
+        panel = ttk.Frame(self.parent, padding=8)
+        panel.pack(side="left", fill="y")
+
+        self.titulo_var = tk.StringVar(value="")
+        ttk.Label(panel, textvariable=self.titulo_var,
+                  font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
+
+        sel = ttk.LabelFrame(panel, text="Abertura", padding=6)
+        sel.pack(fill="x", pady=4)
+        self.aper = tk.StringVar(value=list(APERTURAS_20)[0])
+        cb = ttk.Combobox(sel, textvariable=self.aper, state="readonly",
+                          values=list(APERTURAS_20), width=30)
+        cb.pack(fill="x")
+        cb.bind("<<ComboboxSelected>>", self._on_aperture)
+
+        self.param_frame = ttk.LabelFrame(panel, text="Parámetros", padding=6)
+        self.param_frame.pack(fill="x", pady=4)
+
+        self.escala_frame = ttk.LabelFrame(panel, text="Escala de intensidad",
+                                           padding=6)
+        self.escala = tk.StringVar(value="gamma")
+        for txt, val in (("Lineal", "lineal"), ("γ (0.4)", "gamma"),
+                         ("Log", "log")):
+            ttk.Radiobutton(self.escala_frame, text=txt, variable=self.escala,
+                            value=val, command=self.recompute).pack(side="left")
+
+        self.status_frame = ttk.LabelFrame(panel, text="Régimen del cálculo",
+                                           padding=6)
+        self.status_frame.pack(fill="x", pady=4)
+        self.status = tk.StringVar(value="")
+        self.status_lbl = ttk.Label(self.status_frame, textvariable=self.status,
+                                    justify="left", font=("Consolas", 9))
+        self.status_lbl.pack(anchor="w")
+
+        ex = ttk.LabelFrame(panel, text="Expresión de I", padding=6)
+        ex.pack(fill="x", pady=4)
+        self.expr = tk.StringVar(value="")
+        ttk.Label(ex, textvariable=self.expr, justify="left",
+                  font=("Consolas", 8)).pack(anchor="w")
+
+    def _build_figure(self):
+        right = ttk.Frame(self.parent)
+        right.pack(side="left", fill="both", expand=True)
+        self.fig = Figure(figsize=(10.5, 8.0))
+        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        NavigationToolbar2Tk(self.canvas, right).update()
+
+    def _on_aperture(self, *_):
+        entry = APERTURAS_20[self.aper.get()]
+        for w in self.param_frame.winfo_children():
+            w.destroy()
+        self._pv = []
+        for (clave, label, frm, to, init, esc, fmt) in entry["sliders"]:
+            var = crear_slider(self.param_frame, label, frm, to, init,
+                               self.recompute, fmt)
+            self._pv.append((clave, var, esc))
+
+        if entry["usa_escala"]:
+            self.escala_frame.pack(fill="x", pady=4, before=self.status_frame)
+        else:
+            self.escala_frame.pack_forget()
+
+        self.titulo_var.set(entry["titulo"])
+        self.status_frame.configure(
+            text=entry.get("status_titulo", "Régimen del cálculo"))
+        self.expr.set(entry.get("expr", ""))
+        self.recompute()
+
+    def recompute(self):
+        entry = APERTURAS_20[self.aper.get()]
+        p = {clave: var.get() * esc for (clave, var, esc) in self._pv}
+        txt, color = entry["render"](self.fig, p, self.escala.get())
+        self.status.set(txt)
+        self.status_lbl.configure(foreground=color)
+        self.canvas.draw_idle()
+
+
+# =============================================================================
+# 7. PESTAÑA DE INTENSIDAD ABSOLUTA (sin normalizar) vs x'
+# =============================================================================
+
+# Solo las aberturas con plano de observación físico x' (excluye las angulares:
+# rendijas, escalón, redes en cascada).
+ABS_NAMES = [n for n, e in APERTURAS_20.items() if "abs" in e]
+
+
+class TabAbsoluto:
+    """Muestra I_abs(x',0) = |U|² relativa al incidente (centro = (Área/λz)²),
+    con la normalizada debajo para comparar. Selector limitado a ABS_NAMES."""
+
+    def __init__(self, parent):
+        self.parent = parent
+        self._pv = []
+        self._build_controls()
+        self._build_figure()
+        self._on_aperture()
+
+    def _build_controls(self):
+        panel = ttk.Frame(self.parent, padding=8)
+        panel.pack(side="left", fill="y")
+
+        self.titulo_var = tk.StringVar(value="")
+        ttk.Label(panel, textvariable=self.titulo_var,
+                  font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
+
+        sel = ttk.LabelFrame(panel, text="Abertura", padding=6)
+        sel.pack(fill="x", pady=4)
+        self.aper = tk.StringVar(value=ABS_NAMES[0])
+        cb = ttk.Combobox(sel, textvariable=self.aper, state="readonly",
+                          values=ABS_NAMES, width=30)
+        cb.pack(fill="x")
+        cb.bind("<<ComboboxSelected>>", self._on_aperture)
+
+        self.param_frame = ttk.LabelFrame(panel, text="Parámetros", padding=6)
+        self.param_frame.pack(fill="x", pady=4)
+
+        self.status_frame = ttk.LabelFrame(panel, text="Intensidad absoluta",
+                                           padding=6)
+        self.status_frame.pack(fill="x", pady=4)
+        self.status = tk.StringVar(value="")
+        self.status_lbl = ttk.Label(self.status_frame, textvariable=self.status,
+                                    justify="left", font=("Consolas", 9))
+        self.status_lbl.pack(anchor="w")
+
+        ex = ttk.LabelFrame(panel, text="Expresión de I", padding=6)
+        ex.pack(fill="x", pady=4)
+        self.expr = tk.StringVar(value="")
+        ttk.Label(ex, textvariable=self.expr, justify="left",
+                  font=("Consolas", 8)).pack(anchor="w")
+
+    def _build_figure(self):
+        right = ttk.Frame(self.parent)
+        right.pack(side="left", fill="both", expand=True)
+        self.fig = Figure(figsize=(10.5, 8.0))
+        gs = self.fig.add_gridspec(2, 1, hspace=0.32)
+        self.ax_abs = self.fig.add_subplot(gs[0, 0])
+        self.ax_norm = self.fig.add_subplot(gs[1, 0])
+        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        NavigationToolbar2Tk(self.canvas, right).update()
+
+    def _on_aperture(self, *_):
+        entry = APERTURAS_20[self.aper.get()]
+        for w in self.param_frame.winfo_children():
+            w.destroy()
+        self._pv = []
+        for (clave, label, frm, to, init, esc, fmt) in entry["sliders"]:
+            var = crear_slider(self.param_frame, label, frm, to, init,
+                               self.recompute, fmt)
+            self._pv.append((clave, var, esc))
+        self.titulo_var.set(entry["titulo"])
+        self.expr.set(entry.get("expr", ""))
+        self.recompute()
+
+    def recompute(self):
+        entry = APERTURAS_20[self.aper.get()]
+        p = {clave: var.get() * esc for (clave, var, esc) in self._pv}
+        x, I_abs, I_norm = entry["abs"](p)
+        xmm = x * 1e3
+
+        ax = self.ax_abs
+        ax.clear()
+        ax.plot(xmm, I_abs, color="darkorange", lw=1.1)
+        ax.fill_between(xmm, I_abs, alpha=0.20, color="darkorange")
+        ax.set_xlim(xmm[0], xmm[-1])
+        ax.set_ylim(bottom=0.0)
+        ax.set_xlabel("x'  [mm]   (perfil en y'=0)")
+        ax.set_ylabel("I / I_inc  (absoluta)")
+        ax.set_title("Intensidad absoluta  I(x',0) = |U|²  (centro = (Área/λz)²)")
+
+        ax = self.ax_norm
+        ax.clear()
+        ax.plot(xmm, I_norm, color="crimson", lw=1.0)
+        ax.fill_between(xmm, I_norm, alpha=0.15, color="crimson")
+        ax.set_xlim(xmm[0], xmm[-1])
+        ax.set_ylim(bottom=0.0)
+        ax.set_xlabel("x'  [mm]")
+        ax.set_ylabel("I / I₀  (normalizada)")
+        ax.set_title("Misma curva normalizada (comparación)")
+
+        axial = I_abs[np.argmin(np.abs(x))] if x.size else float("nan")
+        self.status.set(
+            f"I_abs(x'=0) = {axial:.4e}\n"
+            f"(= (Área/λz)², relativa a la\n"
+            f" onda incidente amplitud 1)")
+        self.status_lbl.configure(foreground="#333333")
+        self.canvas.draw_idle()
 
 
 def main():
     root = tk.Tk()
     root.title("Código 20 — Difracción de Fraunhofer analítica 2D")
-
     nb = ttk.Notebook(root)
     nb.pack(fill="both", expand=True)
 
-    tab0 = ttk.Frame(nb)
-    nb.add(tab0, text="Dos aberturas")
-    FraunhoferGUI(tab0)
+    t1 = ttk.Frame(nb)
+    nb.add(t1, text="Patrón (normalizado)")
+    HostFraunhofer(t1)
 
-    tab1 = ttk.Frame(nb)
-    nb.add(tab1, text="Taller — Rectángulo rotado")
-    TabRectanguloRotado(tab1)
-
-    tab2 = ttk.Frame(nb)
-    nb.add(tab2, text="Taller — Cruz")
-    TabCruz(tab2)
-
-    tab3 = ttk.Frame(nb)
-    nb.add(tab3, text="Taller — Dos semicírculos")
-    TabDosSemicirculos(tab3)
-
-    tab4 = ttk.Frame(nb)
-    nb.add(tab4, text="Taller — Doble cuadrado")
-    TabDobleCuadrado(tab4)
-
-    tab5 = ttk.Frame(nb)
-    nb.add(tab5, text="Taller — Rendija(s) 1..N")
-    TabRendijas(tab5)
-
-    tab6 = ttk.Frame(nb)
-    nb.add(tab6, text="Taller — Escalón Michelson")
-    TabEscalon(tab6)
-
-    tab7 = ttk.Frame(nb)
-    nb.add(tab7, text="Taller — Doble círculo (Fh+Fr)")
-    TabDobleCirculo(tab7)
-
-    tab8 = ttk.Frame(nb)
-    nb.add(tab8, text="Taller — Redes en cascada")
-    TabRedesCascada(tab8)
+    t2 = ttk.Frame(nb)
+    nb.add(t2, text="Intensidad absoluta")
+    TabAbsoluto(t2)
 
     root.mainloop()
 

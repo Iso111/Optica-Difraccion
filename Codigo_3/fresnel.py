@@ -88,45 +88,60 @@ def mascara_rendijas(X, Y, a, d, N):
 
 APERTURAS = {
     "Doble círculo (pto 19)": {
-        "sliders": [("r1 (mm)", 0.2, 3.0, 1.0, 1e-3, "{:.3f}"),
-                    ("r2 (mm)", 0.2, 3.0, 1.41, 1e-3, "{:.3f}")],
+        "sliders": [("r1 (mm)", 0.2, 15.0, 1.0, 1e-3, "{:.3f}"),
+                    ("r2 (mm)", 0.2, 15.0, 1.41, 1e-3, "{:.3f}")],
         "mask": lambda X, Y, p: mascara_doble_circulo(X, Y, p[0], p[1]),
         "Dchar": lambda p: 2.0 * max(p[0], p[1]),
+        "expr": ("Numérico (FFT). Fraunhofer axial (Área/λz)²;\n"
+                 "Fresnel vía zonas. Área = ¾πr1² + ¼πr2²"),
     },
     "Dos semicírculos (pto 9)": {
-        "sliders": [("r1 sup (mm)", 0.2, 3.0, 2.0, 1e-3, "{:.3f}"),
-                    ("r2 inf (mm)", 0.2, 3.0, 1.414, 1e-3, "{:.3f}")],
+        "sliders": [("r1 sup (mm)", 0.2, 15.0, 2.0, 1e-3, "{:.3f}"),
+                    ("r2 inf (mm)", 0.2, 15.0, 1.414, 1e-3, "{:.3f}")],
         "mask": lambda X, Y, p: mascara_dos_semicirculos(X, Y, p[0], p[1]),
         "Dchar": lambda p: 2.0 * max(p[0], p[1]),
+        "expr": ("Numérico (FFT de la máscara). Axial:\n"
+                 "I(0,0)/I₀ = (Área/λz)²,  Área = π(r1²+r2²)/2"),
     },
     "Cruz (pto 5)": {
-        "sliders": [("L largo (mm)", 0.5, 6.0, 3.0, 1e-3, "{:.3f}"),
-                    ("a ancho (mm)", 0.1, 2.0, 0.6, 1e-3, "{:.3f}")],
+        "sliders": [("L largo (mm)", 0.5, 30.0, 3.0, 1e-3, "{:.3f}"),
+                    ("a ancho (mm)", 0.1, 10.0, 0.6, 1e-3, "{:.3f}")],
         "mask": lambda X, Y, p: mascara_cruz(X, Y, p[0], p[1]),
         "Dchar": lambda p: np.hypot(p[0], p[0]),
+        "expr": ("I = |La·sinc(L·fx)sinc(a·fy) + aL·sinc(a·fx)sinc(L·fy)\n"
+                 "     − a²·sinc(a·fx)sinc(a·fy)|² / (2La − a²)²"),
     },
     "Doble cuadrado (pto 14)": {
-        "sliders": [("a lado peq (mm)", 0.1, 1.5, 0.5, 1e-3, "{:.3f}")],
+        "sliders": [("a lado peq (mm)", 0.1, 8.0, 0.5, 1e-3, "{:.3f}")],
         "mask": lambda X, Y, p: mascara_doble_cuadrado(X, Y, p[0]),
         "Dchar": lambda p: np.hypot(6.0 * p[0], 3.0 * p[0]),
+        "expr": ("I = A1² + A2² + 2A1A2·cos(2πD·fx),  D = 4a\n"
+                 "A1 = a²·sinc(a·fx)sinc(a·fy)\n"
+                 "A2 = 9a²·sinc(3a·fx)sinc(3a·fy)"),
     },
     "N rendijas (ptos 2/6)": {
-        "sliders": [("a ranura (mm)", 0.05, 1.0, 0.15, 1e-3, "{:.3f}"),
-                    ("d período (mm)", 0.1, 2.0, 0.45, 1e-3, "{:.3f}"),
-                    ("N ranuras", 1.0, 12.0, 5.0, 1.0, "{:.0f}")],
+        "sliders": [("a ranura (mm)", 0.05, 5.0, 0.15, 1e-3, "{:.3f}"),
+                    ("d período (mm)", 0.1, 10.0, 0.45, 1e-3, "{:.3f}"),
+                    ("N ranuras", 1.0, 20.0, 5.0, 1.0, "{:.0f}")],
         "mask": lambda X, Y, p: mascara_rendijas(X, Y, p[0], p[1], int(p[2])),
-        "Dchar": lambda p: int(p[2]) * p[1],
+        # N=1 (rendija simple): D_char = ancho a (coincide con w=√(2·N_F) de
+        # la espiral de Cornu). N>1 (red): D_char = extensión total N·d.
+        "Dchar": lambda p: p[0] if int(p[2]) == 1 else int(p[2]) * p[1],
+        "expr": "I = sinc²(a·senθ/λ)·[sin(Nπd·senθ/λ)/(N·sin(πd·senθ/λ))]²",
     },
     "Marco + círculo (pto 1)": {
-        "sliders": [("a marco (mm)", 0.3, 4.0, 2.0, 1e-3, "{:.3f}"),
-                    ("b marco (mm)", 0.3, 4.0, 3.0, 1e-3, "{:.3f}"),
-                    ("c hueco (mm)", 0.0, 2.0, 0.6, 1e-3, "{:.3f}"),
-                    ("d hueco (mm)", 0.0, 2.0, 1.0, 1e-3, "{:.3f}"),
-                    ("R círc (mm)", 0.2, 2.0, 1.0, 1e-3, "{:.3f}"),
-                    ("D separ (mm)", 2.0, 10.0, 5.0, 1e-3, "{:.3f}")],
+        "sliders": [("a marco (mm)", 0.3, 20.0, 2.0, 1e-3, "{:.3f}"),
+                    ("b marco (mm)", 0.3, 20.0, 3.0, 1e-3, "{:.3f}"),
+                    ("c hueco (mm)", 0.0, 15.0, 0.6, 1e-3, "{:.3f}"),
+                    ("d hueco (mm)", 0.0, 15.0, 1.0, 1e-3, "{:.3f}"),
+                    ("R círc (mm)", 0.2, 15.0, 1.0, 1e-3, "{:.3f}"),
+                    ("D separ (mm)", 2.0, 40.0, 5.0, 1e-3, "{:.3f}")],
         "mask": lambda X, Y, p: mascara_marco_circulo(
             X, Y, p[0], p[1], p[2], p[3], p[4], p[5]),
         "Dchar": lambda p: np.hypot(p[5] + p[0] / 2 + p[4], max(p[1], 2 * p[4])),
+        "expr": ("I = A_marco² + A_círc² + 2·A_marco·A_círc·cos(2πD·fx)\n"
+                 "A_marco = ab·sinc(a·fx)sinc(b·fy) − cd·sinc(c·fx)sinc(d·fy)\n"
+                 "A_círc  = πR²·2J₁(2πRρ)/(2πRρ)"),
     },
 }
 
@@ -134,6 +149,13 @@ APERTURAS = {
 # =============================================================================
 # 3. NÚCLEO: perfiles Fresnel/Fraunhofer sobre el eje angular común
 # =============================================================================
+
+# pad usado por `evolucion` (ventana L = pad·D). Determina el criterio de
+# muestreo del FFT-Fresnel (N > pad²·N_F). pad=4 (en vez de 6) reduce a la
+# mitad el N requerido para campo cercano profundo → permite alcanzar w≈12
+# (N_F≈72) con N=2048 de forma interactiva, y muestrea mejor la abertura.
+PAD_EVOL = 4.0
+
 
 def _campo(mask, dx, lam, z, quiere_2d=False):
     """Fresnel (campo cercano) y Fraunhofer límite del mismo `mask` complejo.
@@ -152,7 +174,7 @@ def _campo(mask, dx, lam, z, quiere_2d=False):
     return out
 
 
-def evolucion(aper, params, lam, NF_actual, NF_fijos, N=512, pad=6.0):
+def evolucion(aper, params, lam, NF_actual, NF_fijos, N=512, pad=PAD_EVOL):
     """
     Para la abertura `aper` (nombre en APERTURAS) con `params` en SI, calcula:
       · el fondo de curvas Fresnel a los N_F de `NF_fijos`,
@@ -162,24 +184,31 @@ def evolucion(aper, params, lam, NF_actual, NF_fijos, N=512, pad=6.0):
     """
     spec = APERTURAS[aper]
     D = spec["Dchar"](params)
-    L = pad * D
-    x = (np.arange(N) - N // 2) * (L / N)
-    dx = L / N
-    X, Y = np.meshgrid(x, x)
-    mask = spec["mask"](X, Y, params).astype(complex)
 
-    def curva(NF, dos_d=False):
+    def curva(NF, Ncur, dos_d=False):
+        """Campo Fresnel/Fraunhofer a resolución Ncur (malla propia)."""
+        L = pad * D
+        x = (np.arange(Ncur) - Ncur // 2) * (L / Ncur)
+        dx = L / Ncur
+        X, Y = np.meshgrid(x, x)
+        mask = spec["mask"](X, Y, params).astype(complex)
         z = D ** 2 / (lam * NF)
-        return _campo(mask, dx, lam, z, quiere_2d=dos_d), z
+        return _campo(mask, dx, lam, z, quiere_2d=dos_d), z, x, mask
 
+    # Fondo: curvas de referencia (N_F bajos) — no requieren alta resolución,
+    # así que se calculan a N acotado para no encarecer el recálculo cuando el
+    # usuario sube N para ver campo cercano profundo (w grande). Solo la curva
+    # ACTUAL y su patrón 2D usan el N pedido.
+    N_fondo = min(N, 640)
     fondo = []
     for NF in NF_fijos:
-        c, z = curva(NF)
+        c, z, _, _ = curva(NF, N_fondo)
         fondo.append((NF, z, c["sen"], c["I_fr"]))
-    cur, z_cur = curva(NF_actual, dos_d=True)
+    cur, z_cur, x_cur, mask_cur = curva(NF_actual, N, dos_d=True)
     return {"D": D, "fondo": fondo, "sen": cur["sen"],
             "I_fr": cur["I_fr"], "I_fh": cur["I_fh"], "I_fr2d": cur["I_fr2d"],
-            "z_cur": z_cur, "dx2": cur["dx2"]}
+            "z_cur": z_cur, "dx2": cur["dx2"],
+            "mascara": mask_cur.real, "x_ap": x_cur}
 
 
 # =============================================================================
@@ -188,6 +217,19 @@ def evolucion(aper, params, lam, NF_actual, NF_fijos, N=512, pad=6.0):
 
 # N_F fijos del fondo (uno es 0.5 = z_min, se dibuja rayado).
 NF_FONDO = [4.0, 2.0, 1.0, 0.5, 0.15]
+
+
+def aviso_muestreo(D, lam, z, N, pad=PAD_EVOL):
+    """El FFT-Fresnel (chirp de entrada) exige z > z_c = N·dx²/λ con
+    dx = pad·D/N  ⇔  N > pad²·N_F. Si no se cumple, el patrón de campo cercano
+    queda SUBMUESTREADO (aliasing). Devuelve (texto_aviso, es_valido).
+    Nota: el tamaño D se cancela en z/z_c = N/(pad²·N_F) — solo importan N y N_F."""
+    dx = pad * D / N
+    z_c = N * dx ** 2 / lam
+    if z >= z_c:
+        return "", True
+    return (f"⚠ SUBMUESTREO: z={z*1e3:.2f} < z_c={z_c*1e3:.2f} mm\n"
+            f"  sube N (px) o baja N_F", False)
 
 
 class TabEvolucionFresnel:
@@ -220,7 +262,7 @@ class TabEvolucionFresnel:
 
         f2 = ttk.LabelFrame(panel, text="Número de Fresnel (evolución)", padding=6)
         f2.pack(fill="x", pady=4)
-        self.NF = crear_slider(f2, "N_F actual", 0.05, 10.0, 2.0,
+        self.NF = crear_slider(f2, "N_F actual", 0.05, 80.0, 2.0,
                                self.recompute, "{:.2f}")
 
         f3 = ttk.LabelFrame(panel, text="Fuente / cálculo", padding=6)
@@ -229,7 +271,7 @@ class TabEvolucionFresnel:
                                 self.recompute, "{:.0f}")
         self.zoom = crear_slider(f3, "zoom (×auto)", 0.3, 3.0, 1.0,
                                  self.recompute, "{:.2f}")
-        self.N = crear_slider(f3, "N (px, FFT)", 256.0, 1024.0, 512.0,
+        self.N = crear_slider(f3, "N (px, FFT)", 256.0, 2048.0, 512.0,
                               self.recompute, "{:.0f}")
 
         f4 = ttk.LabelFrame(panel, text="Escala patrón 2D", padding=6)
@@ -246,13 +288,21 @@ class TabEvolucionFresnel:
                                     font=("Consolas", 9))
         self.status_lbl.pack(anchor="w")
 
+        ex = ttk.LabelFrame(panel, text="Expresión de I", padding=6)
+        ex.pack(fill="x", pady=4)
+        self.expr = tk.StringVar(value="")
+        ttk.Label(ex, textvariable=self.expr, justify="left",
+                  font=("Consolas", 8)).pack(anchor="w")
+
     def _build_figure(self):
         right = ttk.Frame(self.parent)
         right.pack(side="left", fill="both", expand=True)
         self.fig = Figure(figsize=(10.5, 8.0))
-        gs = self.fig.add_gridspec(2, 1, hspace=0.32, height_ratios=[0.9, 1.3])
-        self.ax_2d = self.fig.add_subplot(gs[0, 0])
-        self.ax_ev = self.fig.add_subplot(gs[1, 0])
+        gs = self.fig.add_gridspec(2, 2, hspace=0.32, wspace=0.28,
+                                   height_ratios=[0.9, 1.3])
+        self.ax_ap = self.fig.add_subplot(gs[0, 0])
+        self.ax_2d = self.fig.add_subplot(gs[0, 1])
+        self.ax_ev = self.fig.add_subplot(gs[1, :])
         self.canvas = FigureCanvasTkAgg(self.fig, master=right)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
         NavigationToolbar2Tk(self.canvas, right).update()
@@ -268,6 +318,7 @@ class TabEvolucionFresnel:
                                self.recompute, fmt)
             self.param_vars.append(var)
             self.param_scales.append(escala)
+        self.expr.set(APERTURAS[self.aper.get()].get("expr", ""))
         self.recompute()
 
     def recompute(self):
@@ -289,6 +340,19 @@ class TabEvolucionFresnel:
         sig = np.abs(d["sen"])[Ifh_n > 0.01]
         base = sig.max() if sig.size else np.abs(d["sen"]).max()
         senmax = 1.3 * base / zoom
+
+        # --- Plano de la abertura (máscara rasterizada, misma que evolucion) ---
+        ax = self.ax_ap
+        ax.clear()
+        ext_ap = d["x_ap"][-1] * 1e3
+        ax.imshow(d["mascara"], extent=[-ext_ap, ext_ap, -ext_ap, ext_ap],
+                  origin="lower", cmap="gray", vmin=0, vmax=1)
+        ax.set_xlabel("x̃ [mm]")
+        ax.set_ylabel("ỹ [mm]")
+        ax.set_title("Plano de la abertura (máscara)")
+        rlim = 0.8 * D * 1e3
+        ax.set_xlim(-rlim, rlim)
+        ax.set_ylim(-rlim, rlim)
 
         # --- Patrón 2D Fresnel (N_F actual), recortado a senθ_max·z ---
         ax = self.ax_2d
@@ -341,6 +405,7 @@ class TabEvolucionFresnel:
         # --- Régimen ---
         z = d["z_cur"]
         _, N_F, es_fh = regimen_generico(D, lam, z)
+        aviso, muestreo_ok = aviso_muestreo(D, lam, z, Npx)
         txt = (
             f"D_char = {D*1e3:7.3f} mm\n"
             f"N_F actual = {NF_cur:6.2f}\n"
@@ -350,8 +415,167 @@ class TabEvolucionFresnel:
             f"─────────────────────────\n"
             f"{'FRAUNHOFER (campo lejano)' if es_fh else 'FRESNEL (campo cercano)'}"
         )
+        if aviso:
+            txt += "\n" + aviso
         self.status.set(txt)
-        self.status_lbl.configure(foreground="#127a12" if es_fh else "#c00000")
+        color = "#c00000" if not muestreo_ok else ("#127a12" if es_fh else "#c00000")
+        self.status_lbl.configure(foreground=color)
+
+        self.canvas.draw_idle()
+
+
+class TabIntensidadAbsoluta:
+    """Intensidad ABSOLUTA (sin normalizar) vs x' [mm]: |U|² relativa a la onda
+    plana incidente (amplitud 1). Reusa `evolucion` (que ya da |U|² absoluto) y
+    dibuja el corte Fresnel al N_F actual + la Fraunhofer límite, más la máscara.
+    Contrasta con la pestaña de evolución, que normaliza cada curva a su pico."""
+
+    def __init__(self, parent):
+        self.parent = parent
+        self.param_vars = []
+        self.param_scales = []
+        self._build_controls()
+        self._build_figure()
+        self._on_aperture()
+
+    def _build_controls(self):
+        panel = ttk.Frame(self.parent, padding=8)
+        panel.pack(side="left", fill="y")
+        ttk.Label(panel, text="Intensidad absoluta (sin normalizar)",
+                  font=("", 11, "bold")).pack(anchor="w", pady=(0, 6))
+
+        sel = ttk.LabelFrame(panel, text="Abertura", padding=6)
+        sel.pack(fill="x", pady=4)
+        self.aper = tk.StringVar(value=list(APERTURAS)[0])
+        cb = ttk.Combobox(sel, textvariable=self.aper, state="readonly",
+                          values=list(APERTURAS), width=24)
+        cb.pack(fill="x")
+        cb.bind("<<ComboboxSelected>>", lambda e: self._on_aperture())
+
+        self.param_frame = ttk.LabelFrame(panel, text="Parámetros", padding=6)
+        self.param_frame.pack(fill="x", pady=4)
+
+        f2 = ttk.LabelFrame(panel, text="Número de Fresnel", padding=6)
+        f2.pack(fill="x", pady=4)
+        self.NF = crear_slider(f2, "N_F actual", 0.05, 80.0, 2.0,
+                               self.recompute, "{:.2f}")
+
+        f3 = ttk.LabelFrame(panel, text="Fuente / cálculo", padding=6)
+        f3.pack(fill="x", pady=4)
+        self.lam = crear_slider(f3, "λ (nm)", 380.0, 1000.0, 500.0,
+                                self.recompute, "{:.0f}")
+        self.zoom = crear_slider(f3, "zoom (×auto)", 0.3, 3.0, 1.0,
+                                 self.recompute, "{:.2f}")
+        self.N = crear_slider(f3, "N (px, FFT)", 256.0, 2048.0, 512.0,
+                              self.recompute, "{:.0f}")
+
+        st = ttk.LabelFrame(panel, text="Régimen", padding=6)
+        st.pack(fill="x", pady=4)
+        self.status = tk.StringVar(value="")
+        self.status_lbl = ttk.Label(st, textvariable=self.status, justify="left",
+                                    font=("Consolas", 9))
+        self.status_lbl.pack(anchor="w")
+
+        ex = ttk.LabelFrame(panel, text="Expresión de I", padding=6)
+        ex.pack(fill="x", pady=4)
+        self.expr = tk.StringVar(value="")
+        ttk.Label(ex, textvariable=self.expr, justify="left",
+                  font=("Consolas", 8)).pack(anchor="w")
+
+    def _build_figure(self):
+        right = ttk.Frame(self.parent)
+        right.pack(side="left", fill="both", expand=True)
+        self.fig = Figure(figsize=(10.5, 8.0))
+        gs = self.fig.add_gridspec(2, 1, hspace=0.32, height_ratios=[0.9, 1.3])
+        self.ax_ap = self.fig.add_subplot(gs[0, 0])
+        self.ax_abs = self.fig.add_subplot(gs[1, 0])
+        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        NavigationToolbar2Tk(self.canvas, right).update()
+
+    def _on_aperture(self):
+        for w in self.param_frame.winfo_children():
+            w.destroy()
+        self.param_vars = []
+        self.param_scales = []
+        for (label, frm, to, init, escala, fmt) in APERTURAS[self.aper.get()]["sliders"]:
+            var = crear_slider(self.param_frame, label, frm, to, init,
+                               self.recompute, fmt)
+            self.param_vars.append(var)
+            self.param_scales.append(escala)
+        self.expr.set(APERTURAS[self.aper.get()].get("expr", ""))
+        self.recompute()
+
+    def recompute(self):
+        params = [v.get() * e for v, e in zip(self.param_vars, self.param_scales)]
+        if not params:
+            return
+        lam = self.lam.get() * 1e-9
+        NF_cur = self.NF.get()
+        Npx = int(self.N.get())
+        zoom = self.zoom.get()
+
+        d = evolucion(self.aper.get(), params, lam, NF_cur, NF_FONDO, N=Npx)
+        D = d["D"]
+        z = d["z_cur"]
+
+        # Rango angular: hasta donde la Fraunhofer límite es significativa.
+        Ifh = d["I_fh"]
+        Ifh_n = Ifh / Ifh.max() if Ifh.max() > 0 else Ifh
+        sig = np.abs(d["sen"])[Ifh_n > 0.01]
+        base = sig.max() if sig.size else np.abs(d["sen"]).max()
+        senmax = 1.3 * base / zoom
+
+        # --- Plano de la abertura (máscara) ---
+        ax = self.ax_ap
+        ax.clear()
+        ext_ap = d["x_ap"][-1] * 1e3
+        ax.imshow(d["mascara"], extent=[-ext_ap, ext_ap, -ext_ap, ext_ap],
+                  origin="lower", cmap="gray", vmin=0, vmax=1)
+        ax.set_xlabel("x̃ [mm]")
+        ax.set_ylabel("ỹ [mm]")
+        ax.set_title("Plano de la abertura (máscara)")
+        rlim = 0.8 * D * 1e3
+        ax.set_xlim(-rlim, rlim)
+        ax.set_ylim(-rlim, rlim)
+
+        # --- Perfil ABSOLUTO |U|² vs x' (sin normalizar) ---
+        ax = self.ax_abs
+        ax.clear()
+        xp = d["sen"] * z * 1e3            # x' = senθ·z  [mm]
+        m = np.abs(d["sen"]) <= senmax
+        ax.plot(xp[m], Ifh[m], color="black", lw=1.4, label="Fraunhofer (límite)")
+        ax.plot(xp[m], d["I_fr"][m], color="crimson", lw=1.6,
+                label=f"Fresnel N_F={NF_cur:.2f}")
+        ax.fill_between(xp[m], d["I_fr"][m], alpha=0.15, color="crimson")
+        ax.set_xlim(xp[m].min(), xp[m].max())
+        ax.set_ylim(bottom=0.0)
+        ax.set_xlabel(f"x' = senθ·z  [mm]   (z = {z:.3f} m)")
+        ax.set_ylabel("I / I_inc  (absoluta, sin normalizar)")
+        ax.legend(fontsize=8, loc="upper right")
+        ax.set_title("Intensidad absoluta |U|²  (onda incidente amplitud 1)")
+
+        # --- Régimen ---
+        _, N_F, es_fh = regimen_generico(D, lam, z)
+        z_min = 2.0 * D ** 2 / lam
+        i_fr0 = d["I_fr"][np.argmin(np.abs(d["sen"]))]
+        i_fh0 = Ifh[np.argmin(np.abs(d["sen"]))]
+        aviso, muestreo_ok = aviso_muestreo(D, lam, z, Npx)
+        txt = (
+            f"D_char = {D*1e3:7.3f} mm\n"
+            f"N_F actual = {NF_cur:6.2f}   z = {z:.3f} m\n"
+            f"z_min = {z_min:8.3f} m  (N_F=0.5)\n"
+            f"─────────────────────────\n"
+            f"I_abs(0) Fresnel    = {i_fr0:7.3f}\n"
+            f"I_abs(0) Fraunhofer = {i_fh0:7.3f}\n"
+            f"─────────────────────────\n"
+            f"{'FRAUNHOFER (campo lejano)' if es_fh else 'FRESNEL (campo cercano)'}"
+        )
+        if aviso:
+            txt += "\n" + aviso
+        self.status.set(txt)
+        color = "#c00000" if not muestreo_ok else ("#127a12" if es_fh else "#c00000")
+        self.status_lbl.configure(foreground=color)
 
         self.canvas.draw_idle()
 
@@ -364,6 +588,9 @@ def main():
     tab = ttk.Frame(nb)
     nb.add(tab, text="Fresnel → Fraunhofer")
     TabEvolucionFresnel(tab)
+    tab2 = ttk.Frame(nb)
+    nb.add(tab2, text="Intensidad absoluta")
+    TabIntensidadAbsoluta(tab2)
     root.mainloop()
 
 
