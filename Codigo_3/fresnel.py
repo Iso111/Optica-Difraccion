@@ -489,25 +489,32 @@ class TabEvolucionFresnel:
         ax.clear()
         smax3 = senmax * 1e3
         cmap = self.fig.cm if False else None
-        colores = ["#c7e9ff", "#8ec9f0", "#5aa9e0", "#2f7fc0", "#1f5f9f"]
-        for i, (NF, z, sen, I) in enumerate(d["fondo"]):
+        # Colores del fondo: distinguibles entre sí (no todos azules), fijos
+        # por N_F (no por índice) para que no cambien si NF_FONDO se reordena.
+        # z=z_min (N_F=0.5) es un caso aparte: morado rayado, dibujado ENCIMA
+        # (zorder alto) para que nunca quede tapado por otras curvas.
+        COLORES_FONDO = {4.0: "seagreen", 2.0: "steelblue",
+                         1.0: "orchid", 0.15: "darkorange"}
+        for NF, z, sen, I in d["fondo"]:
             senv = sen * 1e3
             m = np.abs(senv) <= smax3
             In = I[m] / I[m].max() if I[m].max() > 0 else I[m]
-            if abs(NF - 0.5) < 1e-9:          # z = z_min → rayada
-                ax.plot(senv[m], In, color="purple", lw=1.3, ls="--",
-                        label=f"z=z_min (N_F={NF:g})")
+            if abs(NF - 0.5) < 1e-9:          # z = z_min → rayada, resaltada
+                ax.plot(senv[m], In, color="purple", lw=1.6, ls="--",
+                        zorder=4, label=f"z=z_min={z:.4g}m (N_F={NF:g})")
             else:
-                ax.plot(senv[m], In, color=colores[i % len(colores)], lw=0.9,
+                color = COLORES_FONDO.get(NF, "gray")
+                ax.plot(senv[m], In, color=color, lw=0.9,
                         label=f"Fresnel N_F={NF:g}")
-        # Fraunhofer límite (fija)
+        # Fraunhofer límite (fija): rojo rayado
         senv = d["sen"] * 1e3
         m = np.abs(senv) <= smax3
         Ifh = d["I_fh"][m]; Ifh = Ifh / Ifh.max() if Ifh.max() > 0 else Ifh
-        ax.plot(senv[m], Ifh, color="black", lw=1.6, label="Fraunhofer (límite)")
-        # Curva actual (resaltada)
+        ax.plot(senv[m], Ifh, color="red", lw=1.6, ls="--", zorder=5,
+                label="Fraunhofer (límite)")
+        # Curva actual (resaltada): negro sólido, siempre encima
         Ifr = d["I_fr"][m]; Ifr = Ifr / Ifr.max() if Ifr.max() > 0 else Ifr
-        ax.plot(senv[m], Ifr, color="crimson", lw=1.8, alpha=0.9,
+        ax.plot(senv[m], Ifr, color="black", lw=2.0, zorder=6,
                 label=f"actual N_F={NF_cur:.2f}")
         ax.set_xlim(-smax3, smax3)
         ax.set_ylim(bottom=0.0)
@@ -705,10 +712,11 @@ class TabIntensidadAbsoluta:
         ax.clear()
         xp = d["sen"] * z * 1e3            # x' = senθ·z  [mm]
         m = np.abs(d["sen"]) <= senmax
-        ax.plot(xp[m], Ifh[m], color="black", lw=1.4, label="Fraunhofer (límite)")
-        ax.plot(xp[m], d["I_fr"][m], color="crimson", lw=1.6,
+        ax.plot(xp[m], Ifh[m], color="red", lw=1.4, ls="--", zorder=4,
+                label="Fraunhofer (límite)")
+        ax.plot(xp[m], d["I_fr"][m], color="black", lw=1.8, zorder=5,
                 label=f"Fresnel N_F={NF_cur:.2f}")
-        ax.fill_between(xp[m], d["I_fr"][m], alpha=0.15, color="crimson")
+        ax.fill_between(xp[m], d["I_fr"][m], alpha=0.15, color="black")
         ax.set_xlim(xp[m].min(), xp[m].max())
         ax.set_ylim(bottom=0.0)
         ax.set_xlabel(f"x' = senθ·z  [mm]   (z = {z:.3f} m)")
