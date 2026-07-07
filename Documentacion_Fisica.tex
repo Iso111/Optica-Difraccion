@@ -1,0 +1,464 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-nodecimaldot]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{geometry}
+\geometry{margin=2.4cm}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{siunitx}
+\usepackage{listings}
+\usepackage[hidelinks]{hyperref}
+\usepackage{parskip}
+
+\definecolor{codegray}{gray}{0.95}
+\definecolor{keyw}{RGB}{0,90,160}
+\definecolor{comm}{RGB}{100,120,100}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  backgroundcolor=\color{codegray},
+  keywordstyle=\color{keyw}\bfseries,
+  commentstyle=\color{comm}\itshape,
+  breaklines=true,
+  frame=single,
+  framesep=4pt,
+  language=Python,
+  showstringspaces=false,
+  columns=fullflexible,
+}
+
+\newcommand{\sinc}{\operatorname{sinc}}
+\newcommand{\Fou}{\mathcal{F}}
+\newcommand{\vx}{\mathbf{r}}
+
+\title{\textbf{Física de los simuladores de difracción óptica}\\[4pt]
+\large Fraunhofer analítico (C\'odigo 20), Fraunhofer por FFT (C\'odigo 21)\\
+y evoluci\'on Fresnel$\rightarrow$Fraunhofer (C\'odigo 22)}
+\author{Proyecto Óptica --- Taller 4 y Parcial 4}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\bigskip
+
+%======================================================================
+\section{Marco teórico común}
+%======================================================================
+
+Los tres programas resuelven el mismo problema físico --- la difracción de una
+onda plana monocromática al atravesar una abertura plana $t(x,y)$ --- pero en
+regímenes distintos y con métodos distintos. Esta sección fija las ecuaciones y
+la notación que reutilizan los tres.
+
+\subsection{La abertura como función de transmisión}
+Una abertura plana se describe por su \emph{función de transmisión} $t(x,y)$, que
+vale $1$ donde la luz pasa y $0$ donde el material la bloquea (aberturas
+binarias). Iluminada por una onda plana de amplitud unidad y longitud de onda
+$\lambda$, el campo justo detrás de la abertura es $U_0(x,y)=t(x,y)$.
+
+\subsection{Difracción de Fresnel (campo cercano)}
+La propagación una distancia $z$ en la aproximación paraxial se escribe como la
+integral de difracción de Fresnel:
+\begin{equation}
+U(x',y') = \frac{e^{ikz}}{i\lambda z}
+\iint t(x,y)\,
+\exp\!\left[\frac{i\pi}{\lambda z}\big((x'-x)^2+(y'-y)^2\big)\right] dx\,dy,
+\label{eq:fresnel}
+\end{equation}
+con $k=2\pi/\lambda$. Desarrollando el cuadrado, la ecuación~\eqref{eq:fresnel}
+se reagrupa en una forma calculable por una \emph{única} FFT:
+\begin{equation}
+U(x',y') = \frac{e^{ikz}}{i\lambda z}\,
+e^{\frac{i\pi}{\lambda z}(x'^2+y'^2)}\;
+\Fou\!\left\{ t(x,y)\, e^{\frac{i\pi}{\lambda z}(x^2+y^2)} \right\}
+\Bigg|_{f_x=\frac{x'}{\lambda z},\, f_y=\frac{y'}{\lambda z}}.
+\label{eq:fresnel_fft}
+\end{equation}
+El factor cuadrático $e^{i\pi(x^2+y^2)/\lambda z}$ dentro de la transformada es el
+\emph{chirp} de entrada; el de fuera es el chirp de salida. Esta es exactamente la
+forma que implementa la función \texttt{fresnel\_propagate}.
+
+\subsection{Difracción de Fraunhofer (campo lejano)}
+Cuando $z$ es muy grande, el chirp de entrada $e^{i\pi(x^2+y^2)/\lambda z}\to 1$
+sobre toda la abertura, y la ecuación~\eqref{eq:fresnel_fft} se reduce a una
+\textbf{transformada de Fourier pura} de la abertura:
+\begin{equation}
+U(x',y') \propto \Fou\{t(x,y)\}(f_x,f_y),
+\qquad f_x=\frac{x'}{\lambda z},\quad f_y=\frac{y'}{\lambda z},
+\label{eq:fraunhofer}
+\end{equation}
+y la intensidad observada es $I(x',y')\propto |U(x',y')|^2$. Este es el resultado
+central que unifica los Códigos 20 y 21: \emph{el patrón de Fraunhofer es el
+módulo al cuadrado de la transformada de Fourier espacial de la abertura}. El
+Código 20 evalúa esa transformada \emph{analíticamente} (fórmulas cerradas); el
+Código 21 la evalúa \emph{numéricamente} (FFT de la máscara).
+
+\subsection{Número de Fresnel y criterio de campo lejano}
+La frontera entre ambos regímenes la marca el \emph{número de Fresnel}
+\begin{equation}
+N_F = \frac{D^2}{\lambda z},
+\end{equation}
+donde $D$ es la máxima extensión lineal de la abertura ($D_\text{char}$ en el
+código). El chirp de entrada es despreciable cuando su fase máxima
+$\pi D^2/(4\lambda z)$ es pequeña, lo que conduce al criterio de Fraunhofer usado
+en los tres programas:
+\begin{equation}
+z \ge \frac{2D^2}{\lambda}
+\quad\Longleftrightarrow\quad
+N_F \le 0.5.
+\label{eq:criterio}
+\end{equation}
+La distancia umbral $z_\text{min}=2D^2/\lambda$ corresponde a $N_F=0.5$. En
+resumen:
+\begin{center}
+\fbox{\parbox{0.9\textwidth}{\centering
+$N_F$ \textbf{grande} $\Rightarrow$ campo cercano (Fresnel) $\Rightarrow$ usar Código 22.\\
+$N_F \le 0.5$ $\Rightarrow$ campo lejano (Fraunhofer) $\Rightarrow$ Códigos 20 / 21 válidos.}}
+\end{center}
+Los tres programas muestran una \emph{caja de régimen} que colorea en verde
+(Fraunhofer válido) o rojo (Fresnel) según este criterio, para no dar una
+respuesta físicamente falsa.
+
+\subsection{Convención de la \texttt{sinc} normalizada}
+Todo el proyecto usa la \texttt{sinc} normalizada de \texttt{numpy},
+$\sinc(u)=\sin(\pi u)/(\pi u)$, de modo que los ceros caen en enteros $u\in\mathbb{Z}$.
+La transformada de Fourier de un rectángulo de lado $a$ es $a\,\sinc(a f)$
+\emph{sin} ningún factor $\pi$ adicional en el argumento.
+
+%======================================================================
+\section{Código 20 --- Fraunhofer analítico}
+%======================================================================
+
+El Código 20 evalúa la transformada de Fourier de la abertura mediante fórmulas
+cerradas. Contiene nueve aberturas seleccionables; cada una corresponde a un punto
+del taller/parcial. Todas comparten dos bloques constructivos elementales.
+
+\subsection{Bloques elementales}
+\paragraph{Rectángulo.} Un rectángulo de lados $a\times b$ tiene por transformada
+\begin{equation}
+\Fou\{\text{rect}_{a\times b}\} = ab\,\sinc(a f_x)\,\sinc(b f_y),
+\end{equation}
+con primer cero (mínimo de difracción) en $x' = \lambda z/a$.
+
+\paragraph{Círculo (disco de Airy).} Un disco de radio $R$ tiene simetría
+circular; su transformada es una función de Bessel de primer orden:
+\begin{equation}
+\Fou\{\text{circ}_R\} = \pi R^2\,\frac{2 J_1(2\pi R\rho)}{2\pi R\rho},
+\qquad \rho=\sqrt{f_x^2+f_y^2},
+\end{equation}
+con límite $\pi R^2$ (el área) cuando $\rho\to 0$. El primer cero de $J_1$ ocurre
+en $2\pi R\rho = 3.8317$, es decir el primer anillo oscuro del disco de Airy en
+\begin{equation}
+x' = 1.22\,\frac{\lambda z}{2R}.
+\end{equation}
+Estos dos bloques se implementan en \texttt{amplitud\_marco} y
+\texttt{amplitud\_circulo}.
+
+\subsection{Teorema de desplazamiento e interferencia}
+Varias aberturas son \emph{compuestas}: dos sub-aberturas separadas una distancia
+$D$. Por el teorema de desplazamiento de Fourier, trasladar una abertura
+$\pm D/2$ en $x$ multiplica su transformada por $e^{\mp i\pi D f_x}$. La intensidad
+de dos sub-aberturas con amplitudes $A_1$ y $A_2$ es entonces
+\begin{equation}
+I = A_1^2 + A_2^2 + 2 A_1 A_2 \cos(2\pi D f_x).
+\label{eq:interf}
+\end{equation}
+El término coseno son las \textbf{franjas de interferencia} debidas a la
+separación $D$ (período angular $\lambda/D$), moduladas por las dos envolventes de
+difracción $A_1,A_2$. Es el mismo mecanismo que la doble rendija de Young, pero
+con sub-aberturas de forma arbitraria.
+
+\subsection{Las nueve figuras}
+
+\begin{description}[leftmargin=1.2em,style=nextline]
+
+\item[\textbf{1. Marco + círculo (pto 1).}]
+La abertura del Parcial 4: un marco rectangular (rectángulo exterior $a\times b$
+\emph{menos} un rectángulo interior $c\times d$) en $x=-D/2$, y un círculo de radio
+$R$ en $x=+D/2$. Amplitudes:
+\[
+A_\text{marco}=ab\,\sinc(a f_x)\sinc(b f_y)-cd\,\sinc(c f_x)\sinc(d f_y),
+\qquad
+A_\text{círc}=\pi R^2\frac{2J_1(2\pi R\rho)}{2\pi R\rho},
+\]
+combinadas con la ecuación~\eqref{eq:interf}. El patrón muestra el sinc$^2$ del
+marco y el disco de Airy del círculo, atravesados por franjas verticales de paso
+$\lambda z/D$. Normalizada a $I(0,0)=1$.
+
+\item[\textbf{2. Rectángulo rotado (pto 3).}]
+Un rectángulo $a\times b$ girado un ángulo $\theta$ en el plano. Rotar la abertura
+equivale a rotar el plano de frecuencias el mismo ángulo:
+\[
+f_a=f_x\cos\theta+f_y\sin\theta, \quad f_b=-f_x\sin\theta+f_y\cos\theta,
+\qquad I=\sinc^2(a f_a)\,\sinc^2(b f_b).
+\]
+El patrón sinc$^2$ simplemente \emph{gira} solidariamente con la abertura. En
+$\theta=0$ recupera el rectángulo alineado.
+
+\item[\textbf{3. Cruz (pto 5).}]
+Unión de una barra horizontal ($L\times a$) y una vertical ($a\times L$). Por
+inclusión--exclusión de conjuntos, el indicador de la unión es
+$\mathbb{1}_h+\mathbb{1}_v-\mathbb{1}_{h\cap v}$, y como la transformada es lineal:
+\[
+A_\text{cruz}=La\,\sinc(L f_x)\sinc(a f_y)+aL\,\sinc(a f_x)\sinc(L f_y)
+-a^2\,\sinc(a f_x)\sinc(a f_y).
+\]
+El tercer término resta el cuadrado central $a\times a$ contado dos veces.
+Validación: si $a=L$ la cruz degenera algebraicamente en un cuadrado sólido
+$L\times L$.
+
+\item[\textbf{4. Dos semicírculos (pto 9).}]
+Semicírculo superior de radio $r_1$ (en $y\ge0$) unido a un semicírculo inferior
+de radio $r_2$ (en $y<0$). No tiene forma cerrada simple, así que el patrón 2D se
+obtiene por FFT de la máscara (función \texttt{patron\_fft\_semicirculos}). El
+valor \emph{axial} sí es analítico: en $x'=y'=0$ toda sinc/Bessel vale 1 y la
+integral de difracción se reduce al área total,
+\[
+\frac{I(0,0)}{I_0}=\left(\frac{\text{Área}}{\lambda z}\right)^2,
+\qquad \text{Área}=\frac{\pi(r_1^2+r_2^2)}{2}.
+\]
+Casos límite: $r_1=r_2\Rightarrow$ círculo completo (disco de Airy);
+$r_2=0\Rightarrow$ un solo semicírculo.
+
+\item[\textbf{5. Doble cuadrado (pto 14).}]
+Cuadrado pequeño (lado $a$) y grande (lado $3a$), separados $2a$ borde-a-borde, es
+decir $D=4a$ centro-a-centro (geometría fija del enunciado). Es un caso de la
+ecuación~\eqref{eq:interf} con
+\[
+A_1=a^2\sinc(a f_x)\sinc(a f_y), \qquad
+A_2=9a^2\sinc(3a f_x)\sinc(3a f_y).
+\]
+Validación universal: $I(0,0)=(\text{Área})^2=(a^2+9a^2)^2=(10a^2)^2$.
+
+\item[\textbf{6. Rendija(s), 1 a $N$ (ptos 2/6).}]
+$N$ rendijas idénticas de ancho $a$ y período $d$, idealizadas como infinitas en
+$y$. El patrón factoriza en envolvente $\times$ factor de red:
+\[
+I=\underbrace{\sinc^2\!\left(\frac{a\sin\theta}{\lambda}\right)}_{\text{una rendija}}
+\cdot
+\underbrace{\left[\frac{\sin(N\pi d\sin\theta/\lambda)}
+{N\sin(\pi d\sin\theta/\lambda)}\right]^2}_{\text{factor de red}}.
+\]
+La envolvente tiene mínimos en $\sin\theta=m\lambda/a$; el factor de red tiene
+máximos principales en $\sin\theta=m\lambda/d$. Para $N=1$ el factor de red vale
+$1$ y queda la rendija simple. Cuando $d=3a$, el orden $m=3$ de la red coincide
+con el primer cero de la envolvente: es un \emph{orden ausente} (``missing
+order''), que el simulador reproduce.
+
+\item[\textbf{7. Escalón de Michelson (pto 15).}]
+Una escalera de $N$ láminas de vidrio (índice $n$, espesor $h$, saliente $s$).
+Cada peldaño es una rendija de ancho $s$; entre peldaños vecinos la diferencia de
+camino óptico tiene un aporte geométrico $s\sin\theta$ y uno de vidrio $(n-1)h$:
+\[
+\Delta=(n-1)h+s\sin\theta,
+\qquad
+I=\sinc^2\!\left(\frac{s\sin\theta}{\lambda}\right)
+\left[\frac{\sin(N\pi\Delta/\lambda)}{N\sin(\pi\Delta/\lambda)}\right]^2.
+\]
+El término constante $(n-1)h\approx$ mm empuja los órdenes principales a valores de
+$m$ enormes, produciendo la altísima dispersión característica del escalón.
+
+\item[\textbf{8. Doble círculo --- Fraunhofer y Fresnel (pto 19).}]
+La abertura de zonas de Fresnel: un disco de radio $r_1$ en tres cuadrantes,
+extendido a $r_2$ solo en el cuadrante superior-derecho. Se muestran
+\emph{lado a lado} el patrón de Fraunhofer ($|\Fou|^2$, campo lejano) y el de
+Fresnel (\texttt{fresnel\_propagate}, campo cercano) sobre la misma máscara.
+Con $r_1=\sqrt{\lambda z}$ (1.ª zona) y $r_2=\sqrt{2\lambda z}$ (2.ª zona) la
+amplitud axial de Fresnel es $|U|=\tfrac34\cdot 2 + \tfrac14\cdot(\dots)\approx 1.5$,
+es decir $I=2.25$. Es el único caso que ilustra explícitamente el contraste entre
+ambos regímenes dentro del Código 20.
+
+\item[\textbf{9. Redes en cascada (pto 6).}]
+Dos redes binarias idénticas ($N$ ranuras, ancho $a$, período $d=3a$) apiladas,
+la segunda desplazada $s$. Como el producto de dos transmisiones binarias solo
+deja pasar donde \emph{ambas} abren, $t_1(x)\,t_2(x-s)$ es de nuevo una red
+binaria y el patrón es $I=|\Fou\{t_1 t_2(\cdot-s)\}|^2$ (FFT 1D). Al desplazar:
+$s=0\Rightarrow$ una sola red (pico central $=1$); $s=d\Rightarrow$ red de $N-1$
+ranuras (factor $((N-1)/N)^2$); $s\in[a,2a]\Rightarrow$ solape nulo, campo oscuro
+total.
+
+\end{description}
+
+%======================================================================
+\section{Código 21 --- Fraunhofer numérico vía FFT 2D}
+%======================================================================
+
+El Código 21 es la contraparte \emph{numérica} del 20: en vez de fórmulas
+cerradas, rasteriza la máscara $t(x,y)$ y calcula
+$I=|\Fou\{t\}|^2$ directamente con \texttt{fft2}. Esto permite formas que
+\emph{no} tienen transformada analítica (corazón, hexágono, estrella,
+triángulo\dots).
+
+\subsection{Mapeo de coordenadas de la FFT}
+El punto delicado (y la razón de existir del código) es mapear la salida de la FFT
+a metros. Con una ventana de abertura de tamaño físico $L_\text{ap}$ muestreada en
+$N$ puntos:
+\begin{equation}
+dx = \frac{L_\text{ap}}{N},\qquad
+df = \frac{1}{L_\text{ap}},\qquad
+\boxed{\;dx' = \lambda z\, df = \frac{\lambda z}{L_\text{ap}}\;}
+\end{equation}
+La resolución en el plano de observación depende \emph{solo} de la ventana física
+$L_\text{ap}$, no de $N$. El código fija primero un muestreo de la abertura
+($dx_\text{ap}=\text{tamaño}/60$) y hace crecer la ventana con $N$
+($L_\text{ap}=N\,dx_\text{ap}$, equivalente a \emph{zero-padding}), de modo que
+subir $N$ afina realmente el patrón. Un piso $L_\text{ap}\ge 4\times$tamaño evita
+recortar la abertura.
+
+\subsection{Casos de validación físicos}
+\begin{itemize}[leftmargin=1.4em]
+\item \textbf{Rectángulo:} el corte central del $|\Fou|^2$ coincide con el
+$\sinc^2$ analítico del Código 20 (correlación $0.9999$).
+\item \textbf{Círculo:} el primer anillo oscuro cae en $1.22\lambda z/d$ (disco de
+Airy) con error $\sim1.6\%$ (limitado por la resolución de la malla).
+\item \textbf{Simetrías:} un \emph{triángulo} equilátero produce un patrón de
+\emph{seis} puntas (resultado clásico contraintuitivo); el hexágono da simetría
+de seis; una estrella de $p$ puntas da simetría $2p$; el corazón hereda su
+simetría especular en $x$.
+\end{itemize}
+Estas simetrías son la firma de que la FFT respeta la geometría: la transformada
+de una figura con simetría de rotación de orden $m$ tiene simetría de orden $m$
+(o $2m$ si la figura no tiene centro de inversión, como el triángulo).
+
+\subsection{Aberturas compuestas}
+``Círculo + cuadrado'' y ``Corazón + hexágono'' son dos formas distintas separadas
+$D$: su patrón muestra las franjas $\cos(2\pi D f_x)$ de la
+ecuación~\eqref{eq:interf} moduladas por la difracción de cada forma --- la misma
+física de interferencia del Código 20, pero con formas sin fórmula cerrada.
+
+%======================================================================
+\section{Código 22 --- Evolución Fresnel $\rightarrow$ Fraunhofer}
+%======================================================================
+
+El Código 22 responde a la pregunta ``¿cómo se transforma el patrón al pasar de
+campo cercano a campo lejano?''. Grafica, sobre un \emph{mismo eje angular}, la
+familia de patrones de Fresnel para varios números de Fresnel y muestra su
+convergencia al patrón de Fraunhofer cuando $N_F\to 0$.
+
+\subsection{Eje angular común}
+La clave del gráfico es usar como abscisa el \emph{seno del ángulo}
+\begin{equation}
+\sin\theta = \frac{x'}{z},
+\end{equation}
+que es \emph{independiente de $z$}. Así, todas las curvas de Fresnel (calculadas a
+distintos $z$, es decir distintos $N_F$) y la curva de Fraunhofer límite caen
+sobre el mismo eje y se pueden superponer sin reescalar. La curva de Fraunhofer
+queda fija y las de Fresnel convergen a ella al disminuir $N_F$.
+
+\subsection{Conexión con la espiral de Cornu}
+Para una rendija, la integral de Fresnel~\eqref{eq:fresnel} se expresa mediante las
+\emph{integrales de Fresnel} (clotoide o espiral de Cornu):
+\begin{equation}
+C(v)=\int_0^v\!\cos\!\frac{\pi t^2}{2}\,dt,\qquad
+S(v)=\int_0^v\!\sin\!\frac{\pi t^2}{2}\,dt,
+\end{equation}
+y la intensidad tras una rendija $[-a/2,a/2]$ es
+\begin{equation}
+I=\frac{I_0}{2}\Big([C(u_2)-C(u_1)]^2+[S(u_2)-S(u_1)]^2\Big),\quad
+u_{1,2}=\sqrt{\tfrac{2}{\lambda z}}\Big(\mp\tfrac{a}{2}-x'\Big).
+\end{equation}
+El Código 22 calcula el patrón por propagación FFT (\texttt{fresnel\_propagate})
+y se \emph{valida} contra esta fórmula analítica de Cornu
+(\texttt{scipy.special.fresnel}): la correlación es $\ge 0.9999$ a $N_F=2$. Cuando
+$N_F=0.5$ ($z=z_\text{min}$) el patrón de Fresnel ya está muy cerca del de
+Fraunhofer, y a $N_F=0.1$ son indistinguibles (correlación $1.0$).
+
+\subsection{Muestreo adaptativo del chirp}
+El chirp cuadrático de la ecuación~\eqref{eq:fresnel_fft} debe muestrearse con
+suficiente densidad (Nyquist), lo que exige $N\ge \text{pad}^2 N_F$ aprox. La
+función \texttt{\_pad\_muestreo} elige el mayor \emph{pad} (ventana relativa) que
+aún cumpla Nyquist con margen, dando curvas suaves sin aliasing; si tiene que
+forzar el piso, el programa avisa ``SUBMUESTREO'' en rojo. Esto garantiza que las
+curvas de campo cercano profundo (N\_F grande) se calculen sin artefactos
+numéricos.
+
+%======================================================================
+\section{Funciones principales del código}
+%======================================================================
+
+Los tres archivos comparten un núcleo físico (funciones puras \texttt{numpy}, sin
+GUI) reutilizado por importación desde el Código 20. A continuación las funciones
+que llevan la física.
+
+\subsection{Núcleo compartido (definido en el Código 20)}
+\begin{description}[leftmargin=1em,style=nextline]
+\item[\texttt{amplitud\_marco(fx,fy,a,b,c,d)}] Transformada de Fourier del marco
+rectangular (exterior menos interior). Devuelve la amplitud, no la intensidad.
+\item[\texttt{amplitud\_circulo(rho,R)}] Amplitud del disco de Airy
+$\pi R^2\,2J_1(2\pi R\rho)/(2\pi R\rho)$, con el límite $\pi R^2$ tratado
+explícitamente en $\rho=0$.
+\item[\texttt{intensidad(X,Y,p)}] Ensambla el patrón compuesto marco$+$círculo con
+el término de interferencia $\cos(2\pi D f_x)$, normalizado a $I(0,0)=1$.
+\item[\texttt{fresnel\_propagate(U0,dx,lam,z)}] \emph{Motor de Fresnel}: propaga un
+campo complejo una distancia $z$ por la ecuación~\eqref{eq:fresnel_fft} (FFT única
+con chirp de entrada y de salida). Devuelve el campo complejo y el paso de salida
+$dx'=\lambda z/(N\,dx)$. Es la base física del Código 22 y del pto 19.
+\item[\texttt{regimen\_generico(D\_char,lam,z)}] Calcula $z_\text{min}=2D^2/\lambda$
+y $N_F=D^2/(\lambda z)$, y decide si el punto es Fraunhofer ($N_F\le0.5$). Es la
+salvaguarda de validez física en los tres programas.
+\item[\texttt{intensidad\_rendijas}, \texttt{intensidad\_escalon},
+\texttt{intensidad\_doble\_cuadrado}, \texttt{amplitud\_cruz},
+\texttt{amplitud\_rectangulo\_rotado}] Las fórmulas cerradas de cada figura,
+descritas en la sección 2.
+\item[\texttt{patron\_fft\_semicirculos}, \texttt{patrones\_doble\_circulo},
+\texttt{patron\_redes\_cascada}] Patrones que se resuelven por FFT (formas sin
+fórmula simple), con el mapeo $dx'=\lambda z/L_\text{ap}$ validado.
+\end{description}
+
+\subsection{Código 21}
+\begin{description}[leftmargin=1em,style=nextline]
+\item[\texttt{patron\_fft(mask\_fn,params,size,lam,z,xmax,N)}] Motor genérico:
+rasteriza cualquier máscara booleana, aplica \texttt{fft2}, escala por
+$dx^2/(\lambda z)$ y mapea los ejes a metros. Devuelve $(x',I,\text{máscara})$.
+\item[\texttt{mascara\_*}] Nueve máscaras vectorizadas (círculo/elipse,
+rectángulo, círculo$+$cuadrado, red de círculos con desorden, corazón, hexágono,
+estrella, triángulo, corazón$+$hexágono). Cada una define $t(x,y)$ como una
+condición booleana sobre la malla.
+\end{description}
+
+\subsection{Código 22}
+\begin{description}[leftmargin=1em,style=nextline]
+\item[\texttt{\_campo(mask,dx,lam,z)}] Calcula \emph{a la vez} el corte de Fresnel
+(vía \texttt{fresnel\_propagate}) y el de Fraunhofer límite (misma FFT sin el chirp
+de salida) sobre el eje angular $\sin\theta=x'/z$.
+\item[\texttt{\_pad\_muestreo(N,NF)}] Elige el pad óptimo que cumple Nyquist;
+devuelve también una bandera de submuestreo.
+\item[\texttt{evolucion(aper,params,lam,NF\_actual,NF\_fijos,N)}] Orquesta el
+gráfico completo: fondo de curvas de Fresnel a varios $N_F$, la Fraunhofer límite,
+y la curva actual con su patrón 2D.
+\end{description}
+
+\subsection{Utilidades de interfaz (compartidas)}
+\begin{description}[leftmargin=1em,style=nextline]
+\item[\texttt{crear\_slider} / \texttt{crear\_slider\_log}] Fila
+etiqueta$+$\emph{slider}$+$campo editable; el segundo trabaja en escala
+logarítmica para la distancia $z$ (que abarca varios órdenes de magnitud).
+\item[\texttt{\_escala\_norm(I,modo)}] Normalización de intensidad para la
+visualización: lineal, gamma ($\gamma=0.4$) o logarítmica. La escala log revela las
+franjas tenues del patrón.
+\item[\texttt{\_mascara\_fina}] Rasteriza la máscara en malla fina solo para
+mostrarla limpia (independiente de la resolución de la FFT). Puramente visual.
+\item[\texttt{\_status\_regimen}] Genera el texto y color de la caja de régimen
+(verde Fraunhofer / rojo Fresnel).
+\end{description}
+
+%======================================================================
+\section{Validación numérica}
+%======================================================================
+
+Todo el núcleo físico está respaldado por la suite \texttt{validacion\_fisica.py}
+(40 comprobaciones, ejecución \emph{headless}), que verifica cada figura contra su
+caso límite conocido: normalización $I(0,0)=1$, ceros del sinc y del disco de Airy,
+período de franjas $\lambda z/D$, orden ausente de la red $d=3a$, rotación
+solidaria del rectángulo, degeneración de la cruz en cuadrado, amplitud axial de
+las zonas de Fresnel ($I=4$ para una zona), espiral de Cornu contra
+\texttt{scipy.special.fresnel} (correlación $0.9999$), y convergencia
+Fresnel$\rightarrow$Fraunhofer a $N_F=0.1$. Resultado: \textbf{40/40 OK}.
+
+\end{document}
