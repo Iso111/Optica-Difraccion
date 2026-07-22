@@ -1,0 +1,617 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish,es-nodecimaldot]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{geometry}
+\geometry{margin=2.3cm}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{mdframed}
+\usepackage[hidelinks]{hyperref}
+\usepackage{parskip}
+
+\definecolor{azul}{RGB}{0,80,150}
+\definecolor{verde}{RGB}{18,122,18}
+\definecolor{rojo}{RGB}{192,0,0}
+\definecolor{grispanel}{gray}{0.95}
+
+\newcommand{\sinc}{\operatorname{sinc}}
+\newcommand{\Fou}{\mathcal{F}}
+
+% Caja para "lo que digo en voz alta"
+\newmdenv[linecolor=azul,linewidth=1pt,backgroundcolor=grispanel,
+  roundcorner=4pt,innertopmargin=6pt,innerbottommargin=6pt]{decir}
+% Caja para preguntas del profesor
+\newmdenv[linecolor=rojo,linewidth=0.8pt,topline=false,bottomline=false,
+  rightline=false,innerleftmargin=10pt,leftmargin=2pt]{pregunta}
+
+\title{\textbf{Defensa de los simuladores de difracción}\\[4pt]
+\large Cómo implementé los cálculos de Fraunhofer y de Fresnel,\\
+figura por figura, y cómo lo explico}
+\author{Isaac David --- Óptica, Taller 4 y Parcial 4}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{decir}
+\textbf{Cómo usar este documento.} No es la teoría formal (esa está en
+\texttt{Documentacion\_Fisica.pdf}). Esto es mi \emph{guión de defensa}: lo que
+respondo cuando el profesor pregunta ``¿qué hiciste para los cálculos?''. Las
+cajas azules son lo que digo en voz alta; las secciones marcadas con
+``\textcolor{rojo}{P:}'' son preguntas que probablemente me hará y mi respuesta.
+\end{decir}
+
+\tableofcontents
+\bigskip
+
+%======================================================================
+\section{La respuesta de una sola frase}
+%======================================================================
+
+Si el profesor solo me deja decir una cosa, digo esto:
+
+\begin{decir}
+Todo el proyecto se apoya en un único resultado: \textbf{el patrón de difracción
+es el módulo al cuadrado de la transformada de Fourier de la abertura}. En campo
+lejano (Fraunhofer) es la transformada \emph{pura}; en campo cercano (Fresnel) es
+la misma transformada pero con la abertura multiplicada por una fase cuadrática
+(un ``chirp''). Entonces mi trabajo, para cada figura, se reduce a tres cosas:
+\emph{(1)} escribir la función de transmisión $t(x,y)$ de esa abertura,
+\emph{(2)} transformarla ---analíticamente si tiene fórmula cerrada, o con la FFT
+si no la tiene---, y \emph{(3)} tomar el módulo al cuadrado. La física está toda
+en el paso de la transformada; lo demás es álgebra y graficación.
+\end{decir}
+
+La única diferencia entre los tres códigos es \emph{cómo} calculo esa transformada:
+
+\begin{center}
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Código} & \textbf{Qué calcula} & \textbf{Cómo} \\
+\midrule
+20 & Fraunhofer & Fórmula cerrada de la TF (sinc, Bessel) \\
+21 & Fraunhofer & TF numérica: \texttt{fft2} de la máscara \\
+22 & Fresnel$\to$Fraunhofer & TF con chirp (\texttt{fresnel\_propagate}), vs.\ $N_F$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%======================================================================
+\section{El método general: la receta que aplico a cualquier figura}
+%======================================================================
+
+Quiero que quede claro que \textbf{no memoricé una fórmula por figura}: apliqué el
+mismo procedimiento cada vez. Esta es la receta:
+
+\begin{enumerate}[leftmargin=1.5em]
+\item \textbf{Escribo la abertura} como $t(x,y)$: vale 1 donde pasa la luz y 0
+donde el material la bloquea (aberturas binarias). El campo justo detrás es
+$U_0(x,y)=t(x,y)$.
+\item \textbf{Elijo el régimen} con el número de Fresnel $N_F=D^2/\lambda z$
+(sección~\ref{sec:regimen}). $N_F\le0.5\Rightarrow$ Fraunhofer; si no, Fresnel.
+\item \textbf{Transformo:}
+   \begin{itemize}[leftmargin=1.3em]
+   \item Fraunhofer con fórmula: uso los ``bloques'' de la
+   sección~\ref{sec:bloques} (rect$\to$sinc, círculo$\to$Airy) y los combino.
+   \item Fraunhofer sin fórmula (corazón, triángulo\ldots): FFT de la máscara.
+   \item Fresnel: multiplico $t$ por el chirp $e^{i\pi(x^2+y^2)/\lambda z}$ y hago
+   un solo FFT (sección~\ref{sec:fresnel}).
+   \end{itemize}
+\item \textbf{Tomo $|\cdot|^2$} y normalizo.
+\item \textbf{Verifico con un caso límite conocido} antes de darlo por bueno
+(sección~\ref{sec:validacion}). Este paso es el que convierte ``creo que está
+bien'' en ``sé que está bien''.
+\end{enumerate}
+
+\begin{decir}
+El punto que quiero recalcar: la implementación matemática es \emph{la misma
+maquinaria} para las nueve figuras. Lo único que cambia entre una figura y otra es
+la expresión de $t(x,y)$ que le meto a la transformada. Por eso puedo defender
+cualquiera: todas salen del mismo molde.
+\end{decir}
+
+%======================================================================
+\section{Fraunhofer: de dónde sale que \texorpdfstring{$I=|\Fou\{t\}|^2$}{I=|FT|2}}
+%======================================================================
+
+Esto lo puedo derivar en el tablero si me lo piden. Parto de la integral de
+Fresnel (propagación paraxial una distancia $z$):
+\begin{equation}
+U(x',y') = \frac{e^{ikz}}{i\lambda z}
+\iint t(x,y)\,
+e^{\frac{i\pi}{\lambda z}\left[(x'-x)^2+(y'-y)^2\right]}\,dx\,dy .
+\label{eq:fresnel}
+\end{equation}
+Desarrollo el cuadrado $(x'-x)^2 = x'^2 - 2x'x + x^2$ y saco de la integral todo lo
+que no depende de $(x,y)$:
+\begin{equation}
+U(x',y') = \frac{e^{ikz}}{i\lambda z}\,
+e^{\frac{i\pi}{\lambda z}(x'^2+y'^2)}
+\iint \underbrace{t(x,y)\,e^{\frac{i\pi}{\lambda z}(x^2+y^2)}}_{\text{chirp de entrada}}\;
+e^{-\frac{i2\pi}{\lambda z}(x'x+y'y)}\,dx\,dy .
+\label{eq:fresnelfft}
+\end{equation}
+Esa última integral \textbf{es una transformada de Fourier} evaluada en las
+frecuencias
+\begin{equation}
+f_x=\frac{x'}{\lambda z},\qquad f_y=\frac{y'}{\lambda z}.
+\label{eq:mapeo}
+\end{equation}
+
+\textbf{El paso a Fraunhofer:} cuando $z$ es grande, la fase del chirp de entrada
+$e^{i\pi(x^2+y^2)/\lambda z}$ es despreciable sobre toda la abertura (su valor
+$\to 1$). Entonces desaparece y queda
+\begin{equation}
+\boxed{\,U(x',y')\propto \Fou\{t(x,y)\}\big(f_x,f_y\big),\qquad I=|U|^2\, .}
+\end{equation}
+
+\begin{decir}
+Fraunhofer no es una fórmula distinta de Fresnel: es Fresnel cuando el chirp de
+entrada vale 1. Por eso en el código el mismo motor sirve para los dos ---la
+diferencia es si dejo o no el factor de fase cuadrático. Y el mapeo
+$f_x=x'/\lambda z$ es el que convierte ``frecuencia espacial'' en ``posición en la
+pantalla''; es la línea \texttt{fx = X/(lam*z)} que aparece en cada función.
+\end{decir}
+
+%======================================================================
+\section{Los cuatro bloques matemáticos de Fraunhofer}
+\label{sec:bloques}
+%======================================================================
+
+Todas las figuras analíticas (Código 20) las armé combinando cuatro piezas. Si
+domino estas cuatro, domino las nueve figuras.
+
+\paragraph{Bloque 1 --- Rectángulo $\to$ sinc.}
+La TF de un rectángulo de lados $a\times b$ es
+\[
+\Fou\{\text{rect}_{a\times b}\}=ab\,\sinc(a f_x)\,\sinc(b f_y),
+\]
+con la sinc \emph{normalizada} $\sinc(u)=\sin(\pi u)/(\pi u)$. Primer cero (primer
+mínimo de difracción) en $x'=\lambda z/a$. En código:
+\texttt{a*b*np.sinc(a*fx)*np.sinc(b*fy)}.
+
+\paragraph{Bloque 2 --- Círculo $\to$ disco de Airy.}
+Por simetría circular, la TF de un disco de radio $R$ es una Bessel de orden 1:
+\[
+\Fou\{\text{circ}_R\}=\pi R^2\,\frac{2 J_1(2\pi R\rho)}{2\pi R\rho},
+\qquad \rho=\sqrt{f_x^2+f_y^2},
+\]
+con límite $\pi R^2$ (el área) en $\rho\to0$. Primer anillo oscuro donde
+$J_1$ se anula: $2\pi R\rho=3.8317\Rightarrow x'=1.22\,\lambda z/(2R)$. En código
+uso \texttt{scipy.special.j1} y trato el $0/0$ del origen con \texttt{np.where}.
+
+\paragraph{Bloque 3 --- Desplazamiento $\to$ interferencia.}
+Si tengo dos sub-aberturas separadas una distancia $D$, el teorema de
+desplazamiento de Fourier dice que trasladar $\pm D/2$ multiplica la TF por
+$e^{\mp i\pi D f_x}$. Al sumar las dos amplitudes y tomar $|\cdot|^2$ aparece el
+término cruzado:
+\begin{equation}
+I = A_1^2 + A_2^2 + 2A_1 A_2\cos(2\pi D f_x).
+\label{eq:interf}
+\end{equation}
+Ese coseno son las \textbf{franjas de interferencia} de período angular
+$\lambda/D$ ---la misma física de la doble rendija de Young, pero con
+sub-aberturas de forma arbitraria. En código: \texttt{2*A1*A2*np.cos(2*np.pi*D*fx)}.
+
+\paragraph{Bloque 4 --- Linealidad $\to$ uniones e inclusión-exclusión.}
+La TF es lineal, así que la transformada de una unión de formas es la suma de sus
+transformadas ---restando los solapes para no contarlos dos veces
+($\mathbb{1}_{A\cup B}=\mathbb{1}_A+\mathbb{1}_B-\mathbb{1}_{A\cap B}$). Con esto
+armo el marco (exterior $-$ interior) y la cruz (barra $+$ barra $-$ cuadrado
+central).
+
+%======================================================================
+\section{Fraunhofer figura por figura (Código 20)}
+%======================================================================
+
+Para cada figura muestro la misma cadena: \emph{abertura $\to$ expresión
+$\to$ cómo la validé}. Todo sale de combinar los cuatro bloques.
+
+\subsection{Marco + círculo (Punto 1 del Parcial)}
+\textbf{Abertura:} marco rectangular en $x=-D/2$ y círculo en $x=+D/2$.
+\textbf{Expresión} (bloques 1, 2, 3):
+\[
+A_\text{marco}=ab\,\sinc(af_x)\sinc(bf_y)-cd\,\sinc(cf_x)\sinc(df_y),\quad
+A_\text{c}=\pi R^2\tfrac{2J_1(2\pi R\rho)}{2\pi R\rho},
+\]
+\[
+I=A_\text{marco}^2+A_\text{c}^2+2A_\text{marco}A_\text{c}\cos(2\pi D f_x).
+\]
+\textbf{Validación:} normalizo a $I(0,0)=1$ con $A_0=ab-cd+\pi R^2$; compruebo que
+el paso de las franjas verticales es $\lambda z/D$. (Función \texttt{intensidad}.)
+
+\subsection{Rectángulo rotado (Punto 3)}
+\textbf{Idea clave:} rotar la abertura un ángulo $\theta$ equivale a rotar el plano
+de frecuencias el mismo ángulo (propiedad de la TF: $\Fou\{f(R_\theta r)\}=
+F(R_\theta k)$). \textbf{Expresión:}
+\[
+f_a=f_x\cos\theta+f_y\sin\theta,\;\; f_b=-f_x\sin\theta+f_y\cos\theta,
+\qquad I=\sinc^2(af_a)\,\sinc^2(bf_b).
+\]
+\textbf{Validación:} en $\theta=0$ recupera el rectángulo alineado; el patrón
+sinc$^2$ simplemente gira solidario con la abertura.
+
+\subsection{Cruz (Punto 5)}
+\textbf{Abertura:} barra horizontal $L\times a$ $\cup$ barra vertical $a\times L$.
+Por inclusión-exclusión (bloque 4):
+\[
+A_\text{cruz}=La\,\sinc(Lf_x)\sinc(af_y)+aL\,\sinc(af_x)\sinc(Lf_y)
+-a^2\sinc(af_x)\sinc(af_y).
+\]
+El tercer término resta el cuadrado central contado dos veces.
+\textbf{Validación fuerte:} si $a=L$, la cruz \emph{degenera algebraicamente} en un
+cuadrado sólido $L\times L$ ---lo verifico numéricamente.
+
+\subsection{Doble cuadrado (Punto 14)}
+\textbf{Abertura:} cuadrado de lado $a$ y cuadrado de lado $3a$, separados $2a$
+borde-a-borde $\Rightarrow D=4a$ centro-a-centro (geometría fija del enunciado, no
+un parámetro libre). Es el bloque 3 con
+$A_1=a^2\sinc(af_x)\sinc(af_y)$ y $A_2=9a^2\sinc(3af_x)\sinc(3af_y)$.
+\textbf{Validación universal:} $I(0,0)=(\text{área})^2=(a^2+9a^2)^2=(10a^2)^2$.
+
+\subsection{Rendija(s), 1 a $N$ (Puntos 2/6)}
+\textbf{Abertura:} $N$ rendijas de ancho $a$, período $d$, idealizadas infinitas en
+$y$. El patrón factoriza en \emph{envolvente} $\times$ \emph{factor de red}:
+\[
+I=\underbrace{\sinc^2\!\Big(\tfrac{a\sin\theta}{\lambda}\Big)}_{\text{una rendija}}
+\cdot
+\underbrace{\Big[\tfrac{\sin(N\pi d\sin\theta/\lambda)}{N\sin(\pi d\sin\theta/\lambda)}\Big]^2}_{\text{factor de red}} .
+\]
+\textbf{Validación:} $N=1\Rightarrow$ el factor de red vale 1 (rendija simple);
+mínimos de la envolvente en $\sin\theta=m\lambda/a$; con $d=3a$ el orden $m=3$ cae
+sobre un cero de la envolvente $\Rightarrow$ \emph{orden ausente}, que el simulador
+reproduce.
+
+\subsection{Escalón de Michelson (Punto 15)}
+\textbf{Abertura:} escalera de $N$ láminas de vidrio (índice $n$, espesor $h$,
+saliente $s$). Entre peldaños vecinos el desfase óptico tiene un aporte geométrico
+y uno de vidrio: $\Delta=(n-1)h+s\sin\theta$, y
+\[
+I=\sinc^2\!\Big(\tfrac{s\sin\theta}{\lambda}\Big)
+\Big[\tfrac{\sin(N\pi\Delta/\lambda)}{N\sin(\pi\Delta/\lambda)}\Big]^2 .
+\]
+\textbf{Qué explico:} el término constante $(n-1)h\sim$ mm empuja los órdenes
+principales a $m$ enormes $\Rightarrow$ la altísima dispersión típica del escalón.
+
+\subsection{Dos semicírculos (Punto 9)}
+\textbf{Por qué es distinta:} la unión de un semicírculo de radio $r_1$ (arriba) y
+otro $r_2$ (abajo) \emph{no} tiene TF cerrada simple. \textbf{Qué hice:} el patrón
+2D lo saco por FFT de la máscara, pero el \emph{valor axial} sí es analítico ---en
+$x'=y'=0$ toda sinc/Bessel vale 1 y la integral se reduce al área:
+\[
+\frac{I(0,0)}{I_0}=\Big(\frac{\text{área}}{\lambda z}\Big)^2,\quad
+\text{área}=\frac{\pi(r_1^2+r_2^2)}{2}.
+\]
+\textbf{Validación cruzada:} comparo el centro de la FFT contra esta fórmula
+cerrada (el status muestra la diferencia \%). Límites: $r_1=r_2\to$ disco de Airy;
+$r_2=0\to$ un semicírculo.
+
+\subsection{Doble círculo --- zonas de Fresnel (Punto 19)}
+\textbf{La única figura donde muestro los dos regímenes lado a lado.} Abertura:
+disco $r_1$ en tres cuadrantes, extendido a $r_2$ solo en el cuadrante
+superior-derecho. Con $r_1=\sqrt{\lambda z}$ (1.\textsuperscript{a} zona) y
+$r_2=\sqrt{2\lambda z}$ (2.\textsuperscript{a} zona) calculo Fraunhofer ($|\Fou|^2$)
+y Fresnel (\texttt{fresnel\_propagate}) sobre la misma máscara.
+\textbf{Validación:} la amplitud axial de Fresnel da $|U|\approx1.5\Rightarrow I=2.25$
+(y $I=4$ para una zona completa) ---números que salen de la teoría de zonas.
+
+\subsection{Redes en cascada (Punto 6)}
+\textbf{Abertura:} dos redes binarias idénticas ($d=3a$), la segunda desplazada
+$s$. \textbf{Idea:} el producto de dos transmisiones binarias
+$t_1(x)\,t_2(x-s)$ solo deja pasar donde \emph{ambas} abren $\Rightarrow$ vuelve a
+ser una red binaria, y $I=|\Fou\{t_1t_2(\cdot-s)\}|^2$ (FFT 1D).
+\textbf{Validación:} $s=0\Rightarrow$ una sola red (pico $=1$); $s=d\Rightarrow$
+red de $N-1$ ranuras (factor $((N-1)/N)^2$); $s\in[a,2a]\Rightarrow$ solape nulo,
+campo oscuro.
+
+%======================================================================
+\section{Cuando no hay fórmula cerrada: la FFT (Código 21)}
+%======================================================================
+
+Para formas sin transformada analítica (corazón, hexágono, estrella, triángulo\ldots)
+uso el Código 21: rasterizo $t(x,y)$ en una malla y hago $I=|\Fou\{t\}|^2$ con
+\texttt{fft2}. \textbf{El punto delicado ---y donde el profesor puede apretar---
+es el mapeo de las coordenadas de salida de la FFT a metros.}
+
+Con una ventana de abertura $L_\text{ap}$ muestreada en $N$ puntos:
+\begin{equation}
+dx=\frac{L_\text{ap}}{N},\qquad df=\frac{1}{L_\text{ap}},\qquad
+\boxed{\;dx'=\lambda z\,df=\frac{\lambda z}{L_\text{ap}}\;}
+\end{equation}
+
+\begin{decir}
+Dos cosas que sé defender aquí: \emph{Primero}, la resolución en la pantalla
+depende solo de la ventana física $L_\text{ap}$, no de $N$. Por eso, para que subir
+$N$ realmente afine el patrón, hago crecer la ventana con $N$
+($L_\text{ap}=N\,dx_\text{ap}$) ---eso es zero-padding, la interpolación estándar de
+la FFT. \emph{Segundo}, multiplico la FFT por $dx^2/(\lambda z)$: el $dx^2$ es la
+regla de Riemann que convierte la suma discreta de la FFT en la integral continua,
+y el $1/\lambda z$ es el prefactor de la ecuación~\eqref{eq:fresnelfft}.
+\end{decir}
+
+\subsection{Cómo construyo una abertura sin fórmula: la máscara booleana}
+
+Estas son las figuras ``no esenciales'' (corazón, hexágono, triángulo, estrella):
+\textbf{no tienen transformada de Fourier cerrada}, así que el paso 1 de mi receta
+---``escribir $t(x,y)$''--- se vuelve literal. En vez de una fórmula, defino la
+abertura como un \textbf{predicado booleano}: para cada punto de la malla,
+\texttt{True} si está dentro de la figura (transparente) y \texttt{False} si no.
+Ese arreglo de 1 y 0 es la abertura, y le aplico exactamente el mismo motor FFT.
+Usé tres técnicas según la forma:
+
+\paragraph{(a) Curva implícita --- el corazón.}
+Algunas formas se describen por una \emph{desigualdad algebraica}: el interior es
+donde una función $F(x,y)\le0$. Para el corazón uso la curva clásica
+\[
+\Big(\tfrac{x^2}{s^2}+\tfrac{y^2}{s^2}-1\Big)^{\!3}
+-\tfrac{x^2}{s^2}\,\tfrac{y^3}{s^3}\;\le\;0 ,
+\]
+con $s$ el radio característico. Todo punto que cumple la desigualdad es
+transparente. En código es una sola línea vectorizada sobre la malla ---sin
+bucles--- y por eso el corazón hereda su simetría especular en $x$, que reaparece
+en el patrón.
+
+\paragraph{(b) Intersección de semiplanos --- hexágono y triángulo.}
+Cualquier \textbf{polígono convexo} es la intersección de semiplanos: un punto está
+dentro si y solo si está ``del lado bueno'' de \emph{todos} los lados a la vez. Un
+lado con normal $\hat n_k=(\cos\alpha_k,\sin\alpha_k)$ y apotema $r$ define el
+semiplano $x\cos\alpha_k+y\sin\alpha_k\le r$; el interior del polígono es el
+$\bigwedge_k$ (AND lógico) de todos:
+\[
+\text{dentro}(x,y)=\bigwedge_{k}\;\big[\,x\cos\alpha_k+y\sin\alpha_k\le r\,\big].
+\]
+\begin{itemize}[leftmargin=1.4em]
+\item \textbf{Hexágono:} basta con 3 direcciones normales ($\alpha_k=0,60,120^\circ$)
+usando $|\text{proyección}|\le$ apotema, porque los lados opuestos comparten
+dirección; apotema $=s\sqrt3/2$.
+\item \textbf{Triángulo equilátero:} 3 semiplanos (normales a los 3 lados),
+apotema (inradio) $=s/2$. Como el triángulo \emph{no} tiene centro de inversión,
+su patrón adquiere simetría de orden $2\times3=6$ ---la estrella de seis puntas
+que menciono abajo.
+\end{itemize}
+Ambos incluyen un ángulo de giro \texttt{rot}: roto la malla con una matriz de
+rotación \emph{antes} de aplicar el test, así giro la figura sin reescribir las
+desigualdades.
+
+\paragraph{(c) Radio en función del ángulo --- la estrella.}
+Una estrella no es convexa, así que no sirve la intersección de semiplanos. La
+defino en \textbf{coordenadas polares}: un punto está dentro si su radio no supera
+un radio-frontera $r(\theta)$ que oscila entre el radio exterior $s$ (en cada
+punta) y el interior $s\cdot f_\text{int}$ (entre puntas):
+\[
+\text{dentro}(x,y)=\big[\,r\le r(\theta)\,\big],\qquad
+r=\sqrt{x^2+y^2},\;\;\theta=\operatorname{atan2}(y,x),
+\]
+donde $r(\theta)$ es una onda triangular con \texttt{puntas} periodos en
+$[0,2\pi)$. Cambiar el número de picos $p$ es cambiar el periodo de esa onda, y el
+patrón responde con simetría $2p$.
+
+\begin{decir}
+Lo que quiero que se entienda: para estas figuras \emph{la física no cambia en
+nada}. Sigue siendo $I=|\Fou\{t\}|^2$. Lo único distinto es que $t(x,y)$ no viene
+de una fórmula de difracción, sino de una condición geométrica ---``¿este píxel
+está dentro de la figura?''. Elegí la técnica según la forma: desigualdad
+algebraica si la curva es implícita (corazón), AND de semiplanos si es un polígono
+convexo (hexágono, triángulo), y comparación de radio si es un contorno polar
+(estrella). Después, el mismo FFT para todas.
+\end{decir}
+
+\textbf{Las simetrías son mi mejor evidencia de que el mapeo está bien:} un
+triángulo equilátero da un patrón de \emph{seis} puntas (clásico y
+contraintuitivo), el hexágono da simetría 6, una estrella de $p$ puntas da $2p$.
+La TF respeta la geometría, así que si las simetrías salen, el código está bien.
+
+%======================================================================
+\section{Fresnel: de dónde sale el método de un solo FFT}
+\label{sec:fresnel}
+%======================================================================
+
+Aquí está el corazón de lo que el profesor quiere oír sobre Fresnel. \textbf{No
+integré numéricamente la doble integral} de la ecuación~\eqref{eq:fresnel}
+---eso sería un cuádruple bucle, lentísimo. En vez de eso reconocí que la
+ecuación~\eqref{eq:fresnelfft} \emph{ya es una transformada de Fourier}, así que
+Fresnel se calcula con \textbf{un solo FFT}:
+\begin{equation}
+U(x',y')=\frac{1}{i\lambda z}\,
+\underbrace{e^{\frac{i\pi}{\lambda z}(x'^2+y'^2)}}_{\text{chirp de salida}}\;
+\Fou\Big\{\,t(x,y)\,
+\underbrace{e^{\frac{i\pi}{\lambda z}(x^2+y^2)}}_{\text{chirp de entrada}}\Big\}.
+\end{equation}
+
+Esto es exactamente la función \texttt{fresnel\_propagate}:
+\begin{enumerate}[leftmargin=1.5em]
+\item Multiplico la abertura por el \textbf{chirp de entrada} $Q_1=e^{i\pi(X^2+Y^2)/\lambda z}$.
+\item Hago \texttt{fft2} (con \texttt{fftshift}/\texttt{ifftshift} para centrar).
+\item Multiplico por el \textbf{chirp de salida} $Q_2$ y por el prefactor
+$1/(i\lambda z)$, con el paso de salida $dx'=\lambda z/(N\,dx)$.
+\end{enumerate}
+
+\begin{decir}
+La diferencia entre mi Fresnel y mi Fraunhofer es \emph{una línea}: si dejo el
+chirp de entrada $Q_1$, es Fresnel; si lo quito ($Q_1=1$), es Fraunhofer. En el
+Código 22 calculo los dos con la misma malla y los superpongo ---por eso puedo
+mostrar cómo el patrón de Fresnel converge al de Fraunhofer al alejarme.
+\end{decir}
+
+\subsection{El eje angular común: el truco del Código 22}
+Para superponer patrones calculados a distintas distancias $z$ (distintos $N_F$)
+sin reescalar, uso como abscisa el seno del ángulo
+\[
+\sin\theta=\frac{x'}{z},
+\]
+que es \emph{independiente de $z$}. Así la curva de Fraunhofer queda fija y las de
+Fresnel convergen a ella cuando $N_F\to0$.
+
+\subsection{Validación contra la espiral de Cornu}
+Para una rendija, la integral de Fresnel se expresa con las integrales de Fresnel
+(clotoide) $C(v),S(v)$:
+\[
+I=\frac{I_0}{2}\Big([C(u_2)-C(u_1)]^2+[S(u_2)-S(u_1)]^2\Big),\quad
+u_{1,2}=\sqrt{\tfrac{2}{\lambda z}}\Big(\mp\tfrac{a}{2}-x'\Big).
+\]
+\textbf{Cómo validé:} calculo el patrón con \texttt{fresnel\_propagate} y lo comparo
+contra esta fórmula usando \texttt{scipy.special.fresnel}. La correlación es
+$\ge0.9999$ a $N_F=2$, y a $N_F=0.1$ el Fresnel y el Fraunhofer son
+indistinguibles (correlación $1.0$). Eso demuestra que mi motor de un solo FFT
+reproduce la física exacta de Fresnel, no una aproximación mía.
+
+\subsection{Muestreo del chirp (por qué a veces avisa ``submuestreo'')}
+El chirp cuadrático oscila cada vez más rápido en los bordes; para no aliasearlo
+necesito $N\gtrsim\text{pad}^2N_F$ (Nyquist). La función \texttt{\_pad\_muestreo}
+elige la ventana más grande que aún cumpla Nyquist; si tiene que forzar el piso,
+el programa lo avisa en rojo. \textbf{Esto lo menciono para mostrar que sé dónde
+está el límite numérico del método}, no solo la fórmula.
+
+%======================================================================
+\section{El número de Fresnel: cómo sé cuál régimen aplica}
+\label{sec:regimen}
+%======================================================================
+
+Cada código muestra una \textbf{caja de régimen} que colorea verde o rojo. La lógica:
+\begin{equation}
+N_F=\frac{D^2}{\lambda z},\qquad
+z_\text{min}=\frac{2D^2}{\lambda}\;\Longleftrightarrow\; N_F=0.5,
+\end{equation}
+con $D$ = mayor extensión lineal de la abertura. El criterio sale de exigir que la
+fase del chirp de entrada sea pequeña.
+
+\begin{mdframed}[linecolor=verde,linewidth=1pt,backgroundcolor=grispanel]
+\centering
+$N_F\le 0.5$: \textcolor{verde}{\textbf{FRAUNHOFER}} (campo lejano) $\Rightarrow$ Códigos 20/21 válidos.\\
+$N_F$ grande: \textcolor{rojo}{\textbf{FRESNEL}} (campo cercano) $\Rightarrow$ usar Código 22.
+\end{mdframed}
+
+\begin{decir}
+Ojo con la intuición al revés que el profesor puede usar para probarme:
+$N_F$ \emph{grande} es campo \emph{cercano} (Fresnel), y $N_F$ \emph{pequeño} es
+campo \emph{lejano} (Fraunhofer). Puse esa caja de régimen precisamente para no dar
+nunca una respuesta físicamente falsa: si estoy en Fresnel, el código me lo dice en
+rojo y me remite al Código 22.
+\end{decir}
+
+%======================================================================
+\section{Validación: cómo sé que no me equivoqué}
+\label{sec:validacion}
+%======================================================================
+
+Todo el núcleo físico está respaldado por \texttt{validacion\_fisica.py}: una suite
+\emph{headless} de \textbf{40 comprobaciones}, cada figura contra un caso límite
+conocido. Es mi respuesta a ``¿cómo sabes que está bien?'': no lo sé de vista, lo
+sé porque cada expresión pasa su prueba.
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Figura} & \textbf{Caso límite que verifico} \\
+\midrule
+Marco+círculo & $I(0,0)=1$; franjas de paso $\lambda z/D$ \\
+Rectángulo & primer cero del sinc en $\lambda z/a$ \\
+Círculo & primer anillo de Airy en $1.22\lambda z/2R$ \\
+Cruz & degenera en cuadrado si $a=L$ \\
+Rect.\ rotado & gira solidario; $\theta=0$ = alineado \\
+Doble cuadrado & $I(0,0)=(10a^2)^2$ \\
+Red $d=3a$ & orden $m=3$ ausente \\
+Zonas de Fresnel & amplitud axial $I=4$ (una zona) \\
+Rendija (Fresnel) & correlación $\ge0.9999$ vs.\ Cornu \\
+Convergencia & Fresnel$\to$Fraunhofer a $N_F=0.1$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+\textbf{Resultado: 40/40 OK.}
+
+%======================================================================
+\section{Preguntas que probablemente me hará y cómo respondo}
+%======================================================================
+
+\begin{pregunta}
+\textcolor{rojo}{\textbf{P:}} \emph{¿Por qué usas \texttt{np.sinc} y no
+$\sin(x)/x$?}\\
+\textbf{R:} Porque \texttt{np.sinc} es la sinc \emph{normalizada}:
+$\sinc(u)=\sin(\pi u)/(\pi u)$, con ceros en enteros. La TF de un rectángulo de
+lado $a$ es $a\,\sinc(af)$ sin ningún $\pi$ extra en el argumento. Si usara
+$\sin/x$ tendría que meter los $\pi$ a mano y es donde más se equivoca la gente al
+traducir fórmulas de un PDF a numpy.
+\end{pregunta}
+
+\begin{pregunta}
+\textcolor{rojo}{\textbf{P:}} \emph{Tu FFT, ¿te da Fresnel o Fraunhofer?}\\
+\textbf{R:} Depende de si conservo el chirp de entrada. La misma \texttt{fft2}:
+con la abertura multiplicada por $e^{i\pi(x^2+y^2)/\lambda z}$ da Fresnel; sin ese
+factor da Fraunhofer. En el Código 22 calculo ambos con la misma malla justamente
+para mostrar esa relación.
+\end{pregunta}
+
+\begin{pregunta}
+\textcolor{rojo}{\textbf{P:}} \emph{¿Por qué multiplicas la FFT por
+$dx^2/(\lambda z)$?}\\
+\textbf{R:} Son dos cosas distintas. El $dx^2$ convierte la suma discreta de la FFT
+en la integral continua (regla de Riemann: $\sum\to\int dx\,dy$). El $1/(\lambda z)$
+es el prefactor $1/(i\lambda z)$ de la integral de difracción ---en intensidad el
+$i$ desaparece y queda el módulo.
+\end{pregunta}
+
+\begin{pregunta}
+\textcolor{rojo}{\textbf{P:}} \emph{¿Por qué el triángulo da seis puntas y no tres?}\\
+\textbf{R:} Porque el módulo al cuadrado de la TF impone simetría de inversión:
+$|\Fou\{t\}(-k)|=|\Fou\{t\}(k)|$ aunque la figura no la tenga. El triángulo tiene
+simetría de orden 3 pero no centro de inversión, así que el patrón adquiere orden
+$2\times3=6$. Es la firma de que la FFT respeta la geometría.
+\end{pregunta}
+
+\begin{pregunta}
+\textcolor{rojo}{\textbf{P:}} \emph{¿La resolución del patrón mejora si subo $N$?}\\
+\textbf{R:} No por sí sola: $dx'=\lambda z/L_\text{ap}$ depende de la ventana física,
+no de $N$. Por eso hago crecer la ventana con $N$ (zero-padding); así subir $N$ sí
+afina el patrón. Es un punto sutil que verifiqué a propósito.
+\end{pregunta}
+
+\begin{pregunta}
+\textcolor{rojo}{\textbf{P:}} \emph{¿Por qué en el doble cuadrado $D=4a$ y no otro?}\\
+\textbf{R:} Es geometría del enunciado, no un parámetro libre. Cuadrados de lado $a$
+y $3a$ separados $2a$ borde-a-borde: la distancia centro-a-centro es
+$a/2+2a+3a/2=4a$. Ese $D$ fija el período de las franjas de interferencia
+($\lambda z/D$).
+\end{pregunta}
+
+\begin{pregunta}
+\textcolor{rojo}{\textbf{P:}} \emph{Para el marco, ¿por qué restas y no sumas los
+dos rectángulos?}\\
+\textbf{R:} Porque el marco es el rectángulo exterior \emph{menos} el hueco
+interior. Como la TF es lineal, la transformada de la resta de indicadores es la
+resta de transformadas: $A_\text{ext}-A_\text{int}$. Es el mismo argumento de
+inclusión-exclusión que uso en la cruz.
+\end{pregunta}
+
+\begin{pregunta}
+\textcolor{rojo}{\textbf{P:}} \emph{¿Cómo validaste el escalón / las zonas de Fresnel
+si no tienen un ``primer cero'' obvio?}\\
+\textbf{R:} Con el valor axial. En $x'=y'=0$ todas las sinc/Bessel valen 1 y la
+integral se reduce al área de la abertura, así que $I(0,0)=(\text{área}/\lambda z)^2$
+es un número exacto que puedo comparar contra el centro de mi patrón numérico. Para
+las zonas de Fresnel ese número es $I=4$ (una zona) y $2.25$ (la abertura del
+punto 19), que salen de la teoría de zonas.
+\end{pregunta}
+
+\begin{pregunta}
+\textcolor{rojo}{\textbf{P:}} \emph{¿Qué pasa si pongo la abertura muy grande o $z$
+muy corto?}\\
+\textbf{R:} Caigo en campo cercano: $N_F$ sube por encima de 0.5 y la caja de
+régimen se pone roja avisando que el patrón de Fraunhofer ya no es válido y que
+debo usar el Código 22. El código sigue dibujando, pero me advierte que la física
+mostrada no corresponde a ese régimen.
+\end{pregunta}
+
+\vspace{4pt}
+\begin{decir}
+\textbf{Cierre.} Si tengo que resumir la defensa: no repetí una deducción distinta
+por figura. Implementé \emph{una sola} maquinaria ---transformada de Fourier de la
+abertura, con o sin chirp según el régimen--- y para cada figura solo cambié la
+$t(x,y)$ que le entra. Cada expresión tiene un caso límite que la valida, y los 40
+checks confirman que las 9+9+6 figuras salen correctas.
+\end{decir}
+
+\end{document}
